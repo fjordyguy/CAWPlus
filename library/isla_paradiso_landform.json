@@ -1,0 +1,175 @@
+{
+ "key": "isla_paradiso",
+ "world_m": 2048,
+ "sea_m": 27.38,
+ "land_share": 0.2308,
+ "top_above_sea_m": 109.8,
+ "elevation": {
+  "low_medium_high": [
+   0.87,
+   0.111,
+   0.019
+  ],
+  "median_above_sea_m": 12.9,
+  "hypsometric_integral": 0.164
+ },
+ "slope": {
+  "shares": {
+   "gentle <5": 0.204,
+   "moderate 5-15": 0.166,
+   "steep 15-30": 0.266,
+   "very steep 30-45": 0.252,
+   "cliff >45": 0.112
+  },
+  "median_deg": 22.4,
+  "p90_deg": 46.0,
+  "steep_concentration": 0.47
+ },
+ "landforms": {
+  "valley": 0.137,
+  "lower slope": 0.046,
+  "plain": 0.151,
+  "open slope": 0.252,
+  "upper slope": 0.068,
+  "plateau": 0.009,
+  "ridge / peak": 0.337
+ },
+ "transitions": {
+  "flat_to_steep_median_m": 16.0,
+  "flat_to_steep_p10_m": 8.0,
+  "curvature_p90": 0.899
+ },
+ "coast": {
+  "shore_km": 17.7,
+  "raggedness": 6.27,
+  "bays": 9,
+  "bay_area_ha": 46.9,
+  "headlands": 14,
+  "headland_area_ha": 42.9,
+  "sea_on_edges": {
+   "north": 1.0,
+   "south": 1.0,
+   "west": 1.0,
+   "east": 1.0
+  },
+  "beach_share_of_shore": 0.255,
+  "cliff_share_of_shore": 0.515
+ },
+ "water": {
+  "sea_share": 0.768,
+  "lakes": 0,
+  "lake_ha": 0.0,
+  "river_share": 0.0115
+ },
+ "landmarks": {
+  "peaks": 17,
+  "top_peaks": [
+   {
+    "above_sea_m": 133,
+    "drop_m": 138,
+    "x_share": 0.59,
+    "z_share": 0.51
+   },
+   {
+    "above_sea_m": 59,
+    "drop_m": 61,
+    "x_share": 0.46,
+    "z_share": 0.5
+   },
+   {
+    "above_sea_m": 54,
+    "drop_m": 82,
+    "x_share": 0.66,
+    "z_share": 0.26
+   },
+   {
+    "above_sea_m": 53,
+    "drop_m": 59,
+    "x_share": 0.4,
+    "z_share": 0.63
+   },
+   {
+    "above_sea_m": 49,
+    "drop_m": 62,
+    "x_share": 0.35,
+    "z_share": 0.39
+   }
+  ],
+  "cliff_areas": 12,
+  "largest_cliff_ha": 1.4,
+  "deep_valleys": 0
+ },
+ "structure": {
+  "hill_masses": 3,
+  "mass_ha_median": 2.9,
+  "mass_ha_largest": 27.8,
+  "largest_mass_share": 0.832,
+  "raised_share": 0.451,
+  "floor_connected": 0.29,
+  "edge_slope_median_deg": 36.4
+ },
+ "variation": {
+  "micro_rms_m": 2.65,
+  "meso_rms_m": 11.53,
+  "macro_rms_m": 15.17
+ },
+ "playable": {
+  "share_of_land": 0.146,
+  "patches_over_1ha": 1,
+  "largest_ha": 2.1,
+  "top3_ha": [
+   2.1
+  ],
+  "centroid": [
+   0.47,
+   0.51
+  ],
+  "within_300m_of_sea": 1.0
+ },
+ "spatial": {
+  "high_centroid": [
+   0.59,
+   0.51
+  ],
+  "high_quadrants_nw_ne_sw_se": [
+   0.02,
+   0.31,
+   0.02,
+   0.65
+  ],
+  "high_median_m_from_sea": 128.0,
+  "high_in_middle_third": 0.99
+ },
+ "features": {
+  "waterfalls": 12,
+  "mines": 0,
+  "lighthouses": 0,
+  "piers / docks": 1,
+  "ruins": 0,
+  "windmills / farms": 0,
+  "caves": 0,
+  "raised ponds": 1
+ },
+ "islands_over_1ha": 12,
+ "checklist": {
+  "sea": true,
+  "beaches": true,
+  "sea cliffs": true,
+  "bays / inlets": true,
+  "islands": true,
+  "river": true,
+  "lakes": false,
+  "raised ponds": true,
+  "waterfalls": true,
+  "mountains (>150 m)": false,
+  "hills": true,
+  "plateaus / mesas": false,
+  "deep valleys": false,
+  "inland cliffs": true,
+  "large flat area (>15 ha)": false,
+  "mine": false,
+  "lighthouse": false,
+  "piers / docks": true,
+  "ruins": false
+ }
+}

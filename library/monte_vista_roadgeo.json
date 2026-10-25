@@ -1,0 +1,14 @@
+{
+ "km": 11.64,
+ "order": 0.058,
+ "radial": 0.591,
+ "elongation": 0.86,
+ "coast": 0.23,
+ "ring": 0.889,
+ "contour": 0.242,
+ "hilly_km": 6.08,
+ "centre": [
+  0.67,
+  0.61
+ ]
+}

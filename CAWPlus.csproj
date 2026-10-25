@@ -1,0 +1,77 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <!-- CAW runs on the .NET 2.0 CLR (32-bit). net35 runs on that same CLR. -->
+    <TargetFramework>net35</TargetFramework>
+    <PlatformTarget>x86</PlatformTarget>
+    <AssemblyName>CAWPlus</AssemblyName>
+    <RootNamespace>CawPlus</RootNamespace>
+    <!-- 7.3 avoids language features that need newer runtime types (ValueTuple etc.) -->
+    <LangVersion>7.3</LangVersion>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <Version>1.0.0</Version>
+    <Product>CAW Plus</Product>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- offline tools (tools/Fidelity) are separate projects -->
+    <Compile Remove="tools/**" />
+    <!-- CAWPlusHelper (.NET 8, 64-bit) is its own project -->
+    <Compile Remove="helper/**" />
+    <None Remove="helper/**" />
+    <EmbeddedResource Remove="helper/**" />
+    <!-- Lets the modern .NET SDK compile against .NET Framework 3.5 without it being installed as a targeting pack -->
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Reference worlds for Auto-Place ("Props like"), made by tools/worldstats.py; shipped next to CAWPlus.exe -->
+    <None Include="library\*.props" Link="Library\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="library\worlds.txt" Link="Library\worlds.txt" CopyToOutputDirectory="PreserveNewest" />
+    <!-- also built into the exe, so presets work even if the Library folder isn't copied next to it -->
+    <EmbeddedResource Include="library\*.props;library\*.style;library\*_terrain.json;library\*_roadgeo.json;library\*_landform.json;library\worlds.txt" LogicalName="Library.%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+  </ItemGroup>
+
+  <!--
+    No compile-time reference to CAW is needed: everything in CAW is reached by reflection (see src/Caw.cs),
+    so this builds anywhere. It only RUNS from inside the CAW install folder.
+  -->
+
+  <!--
+    CAW.exe is Large Address Aware (4 GB on 64-bit Windows). Set the same flag on CAWPlus.exe after every build,
+    since the entry exe decides this for the whole process. Replaces a manual editbin /LARGEADDRESSAWARE step.
+  -->
+  <UsingTask TaskName="SetLargeAddressAware" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <File ParameterType="System.String" Required="true" />
+    </ParameterGroup>
+    <Task>
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        byte[] b = System.IO.File.ReadAllBytes(File);
+        int pe = System.BitConverter.ToInt32(b, 0x3C);
+        int ch = pe + 4 + 18; // PE signature + COFF Characteristics offset
+        ushort flags = System.BitConverter.ToUInt16(b, ch);
+        if ((flags & 0x20) == 0)
+        {
+            flags |= 0x20;
+            b[ch] = (byte)(flags & 0xFF);
+            b[ch + 1] = (byte)(flags >> 8);
+            System.IO.File.WriteAllBytes(File, b);
+        }
+        Log.LogMessage(MessageImportance.High, "Large Address Aware set: " + File);
+      ]]></Code>
+    </Task>
+  </UsingTask>
+
+  <Target Name="MakeLargeAddressAware" AfterTargets="Build">
+    <SetLargeAddressAware File="$(TargetPath)" />
+  </Target>
+
+</Project>
