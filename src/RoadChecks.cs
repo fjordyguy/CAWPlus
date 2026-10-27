@@ -36,7 +36,7 @@ namespace CawPlus
     internal sealed class RoadShape
     {
         public float Km, Hard, Sharp, Grid, Parallel, Reach;
-        public int T, X, Dead, Core, Hoods, Pieces;
+        public int T, X, Dead, Core, Hoods;
         public bool Connected;
     }
 
@@ -52,7 +52,6 @@ namespace CawPlus
             public int Passed, Total;
             public double Score;                    // 0..1, how close on the checks that failed too
             public List<string> Failed = new List<string>();
-            public RoadShape Shape;
             public string Fallback;                 // set when no layout passed every must (RoadPlanner.PlanChecked)
             public override string ToString()
             {
@@ -189,14 +188,13 @@ namespace CawPlus
                 }
             r.Reach = cells > 0 ? (float)reach / (cells * cells) : 0;
             r.Connected = Connected(net);
-            r.Pieces = net.Roads.Count;
             return r;
         }
 
         /// <summary>The ten checks against the Like world's targets (scaled to this map's size).</summary>
         public static Result Check(RoadShape g, RoadTargets e, float worldM)
         {
-            Result res = new Result(); res.Shape = g;
+            Result res = new Result();
             double score = 0;
             float scale = e.WorldM > 0 ? (worldM * worldM) / (e.WorldM * e.WorldM) : 1; // road amount grows with the land
             Add(res, ref score, "connected", g.Connected ? 1 : 0);
@@ -229,14 +227,17 @@ namespace CawPlus
 
         private static bool Connected(RoadNet net)
         {
-            int n = net.Roads.Count; if (n <= 1) return true;
+            // roads on islands of their own (RoadPlanner.IslandTowns) are separate networks by design
+            List<Road> roads = new List<Road>();
+            foreach (Road r in net.Roads) if (!r.OwnIsland) roads.Add(r);
+            int n = roads.Count; if (n <= 1) return true;
             int[] lab = new int[n]; for (int i = 0; i < n; i++) lab[i] = -1;
             Stack<int> st = new Stack<int>(); st.Push(0); lab[0] = 0; int seen = 1;
             while (st.Count > 0)
             {
                 int a = st.Pop();
                 for (int b = 0; b < n; b++)
-                    if (lab[b] < 0 && Touch(net.Roads[a], net.Roads[b])) { lab[b] = 0; seen++; st.Push(b); }
+                    if (lab[b] < 0 && Touch(roads[a], roads[b])) { lab[b] = 0; seen++; st.Push(b); }
             }
             return seen == n;
         }

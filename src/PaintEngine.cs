@@ -23,8 +23,8 @@ namespace CawPlus
     }
 
     /// <summary>
-    /// Rule-based terrain paint. Started as a port of tools/port_check.py; since v0.2 it adds fractal noise and
-    /// edge breakup for more natural blending, so it no longer matches the Python reference exactly.
+    /// Rule-based terrain paint (the built-in rules; styles use StyledGenerator), with fractal noise and edge breakup
+    /// for natural blending.
     /// Input: height grid in metres (one cell = cellMeters). Output: one 0..1 weight grid per role.
     /// </summary>
     public static class PaintEngine
@@ -90,11 +90,13 @@ namespace CawPlus
             // Pattern size: Detail 50 = 1x; 100 = half-size patches, 0 = 1.6x. Real ground cover is intricate: patches
             // of a few metres inside larger ones, so each layer mixes a broad and a fine scale.
             float ps = Math.Max(0.4f, 1.6f - s.Detail * 0.012f);
-            Grid n1 = Grid.Fbm(W, H, 28f * ps * px, 4, rng); n1.Normalize();        // meadow patches
-            Grid n2 = Grid.Fbm(W, H, 12f * ps * px, 3, rng); n2.Normalize();        // variation inside layers
-            Grid nR = Grid.Fbm(W, H, 16f * ps * px, 4, rng); nR.Normalize();        // where rock breaks through
-            Grid nD = Grid.Fbm(W, H, 5f * ps * px, 3, rng); nD.Normalize();         // fine breakup of every layer
-            Grid nEdge = Grid.Fbm(W, H, 2.5f * ps * px, 2, rng); nEdge.Normalize(); // ragged edges
+            // (the finest patterns no smaller than ~3 m, the size CAW's 1 m paint maps draw as hard flecks, and never
+            // under two cells, which on the preview's coarse grid is random speckle the painted map doesn't have)
+            Grid n1 = Grid.Fbm(W, H, Math.Max(2f, 28f * ps * px), 4, rng);        // meadow patches
+            Grid n2 = Grid.Fbm(W, H, Math.Max(2f, 12f * ps * px), 3, rng);        // variation inside layers
+            Grid nR = Grid.Fbm(W, H, Math.Max(2f, 16f * ps * px), 4, rng);        // where rock breaks through
+            Grid nD = Grid.Fbm(W, H, Math.Max(2f, Math.Max(4f, 5f * ps) * px), 3, rng); // fine breakup of every layer
+            Grid nEdge = Grid.Fbm(W, H, Math.Max(2f, Math.Max(3f, 2.5f * ps) * px), 2, rng); // ragged edges
 
             float hMin, hMax; h.MinMax(out hMin, out hMax);
             float highStart = hMin + (hMax - hMin) * 0.79f;
@@ -187,11 +189,6 @@ namespace CawPlus
             return vis;
         }
 
-        /// <summary>
-        /// The intended look stacks (bottom -> top) Meadow, Shore, Dirt, Rock. CAW stacks paint layers in its own
-        /// order, so convert each role's weight into the opacity it needs at its CAW position to give the same
-        /// final picture. 'cawBottomToTop' = mapped roles sorted by CAW layer index. Unmapped roles fall back to base.
-        /// </summary>
         /// <summary>
         /// Keeps each 256 m terrain chunk to at most 'limit' painted layers (CAW's base layer counts as one; 'others' =
         /// other layers' current maps; 'edge' = the world-edge layer is painted too). Where a chunk has more, the Auto-Paint
@@ -324,6 +321,11 @@ namespace CawPlus
             return outp;
         }
 
+        /// <summary>
+        /// The intended look stacks (bottom -> top) Meadow, Shore, Dirt, Rock. CAW stacks paint layers in its own
+        /// order, so convert each role's weight into the opacity it needs at its CAW position to give the same
+        /// final picture. 'cawBottomToTop' = mapped roles sorted by CAW layer index. Unmapped roles fall back to base.
+        /// </summary>
         public static Dictionary<PaintRole, Grid> ToCawStack(Dictionary<PaintRole, Grid> masks, IList<PaintRole> cawBottomToTop)
         {
             PaintRole[] intendedTopDown = { PaintRole.Rock, PaintRole.Dirt, PaintRole.Shore, PaintRole.Meadow };
@@ -362,16 +364,8 @@ namespace CawPlus
         private static void Report(ProgressFn p, string stage, int pct) { if (p != null) p(stage, pct); }
 
         /// <summary>
-        /// Colour preview with hillshade. 'order' = roles bottom-to-top as they will stack in CAW.
-        /// </summary>
-        public static Bitmap RenderPreview(Grid h, Dictionary<PaintRole, Grid> masks, IList<PaintRole> order,
-                                           float waterLevel, float cellMeters, int size, Grid waterOffset = null)
-        {
-            return RenderPreview(h, masks, order, waterLevel, cellMeters, size, waterOffset, null, BaseColor);
-        }
-
-        /// <summary>
-        /// As above, each role drawn in 'colours' (the mean colour of the texture chosen for it, #163) where given, over
+        /// Colour preview with hillshade; 'order' = roles bottom-to-top as they will stack in CAW. Each role is drawn in
+        /// 'colours' (the mean colour of the texture chosen for it, #163) where given, over
         /// 'baseColour' (the base layer's texture), so the preview shows the world's own colours rather than role colours.
         /// </summary>
         public static Bitmap RenderPreview(Grid h, Dictionary<PaintRole, Grid> masks, IList<PaintRole> order,

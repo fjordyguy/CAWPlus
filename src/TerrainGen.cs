@@ -10,24 +10,23 @@ namespace CawPlus
         public int Seed = 1;
         public float Mountains = 45, Hills = 50, Roughness = 40, FlatLand = 40, Water = 15; // 0..100
         public float Erosion = 50;          // 0..100: how deeply streams cut branching valleys
-        public bool CentralTown = true;     // a gentle town site: placed where it suits the coast (not pinned to the middle), irregular outline
-        public int Pockets = 5;             // with CentralTown: gentler pockets round the town for neighbourhoods
+        public int Pockets = 5;             // gentler pockets round the town for neighbourhoods
         public int Rivers = 2;
         public float MaxHeight = 120;       // metres
         public float SeaLevel = 10;         // metres, CAW's sea level
         public CoastType Coast = CoastType.OceanSide;
-        // learned from the Like world (tools/Fidelity): land height above the sea, as a share of the top, at 0, 10 ... 100 %
+        // learned from the world type (tools/Fidelity): land height above the sea, as a share of the top, at 0, 10 ... 100 %
         // of the land area (lowest to highest); null = the built-in curve (lowlands wider than peaks)
         public float[] HeightCurve;
         public bool InlandLakes = true;     // false: hollows below the sea away from the coast become dry land (most EA worlds)
-        // the Like world's own water split (percent of the map, measured; -1 = not set): sea touching the map edge, and
+        // the world type's own water split (percent of the map, measured; -1 = not set): sea touching the map edge, and
         // lakes at sea level. With them the sea level is set from the sea alone and inland hollows are kept as lakes only
         // up to the lake share (largest first), so rivers and ponds add their own water instead of flooding the lowlands.
         public float SeaShare = -1, LakeShare = -1;
         // sea side: -1 = any direction; 0 = straight along one map edge ... 100 = into a corner (sea on two edges, as
-        // Riverview, Bridgeport, Sunset Valley); learned per Like world (tools/Fidelity)
+        // Riverview, Bridgeport, Sunset Valley); learned per world type (tools/Fidelity)
         public float CoastCorner = -1;
-        public float RiverWidth = 1;        // x the built-in river width (EA's rivers: Riverview 2.8 % of the map; tuned per Like world)
+        public float RiverWidth = 1;        // x the built-in river width (EA's rivers: Riverview 2.8 % of the map; tuned per world type)
         public int Ponds;                   // ponds above sea level (EA: 0-10 per world, 0x707CA200), dug as hollows; Apply terrain fills them
         public float PondRadius = 50;       // metres, their typical size (EA: 16-270 m)
         // world type style (worlds.txt column 36, per EA world)
@@ -38,6 +37,10 @@ namespace CawPlus
         public float Talus = 34;            // degrees: thermal erosion's slope limit on the full map (lower = softer hills)
         public float TownFlat = 0.85f;      // how far the town site is levelled (0..1)
         public float TownSize = 1;          // x the town site's size
+        // rises and mounds on the levelled ground (town site, neighbourhood pockets, flat zones; #170, the tester: towns too flat):
+        // EA's unused town ground has 4.6 bumps per hectare, 3.5 m high and 24 m across (medians of 22 worlds,
+        // library/town_detail.json), plus a few broader knolls. Build roads and Place lots level them where they build.
+        public float BumpHeight = 3.5f, BumpWidth = 24f, BumpDensity = 4.6f; // m, m (half-height width), per hectare
         // landform recipe: separate buttes on an open floor (Lucky Palms: 9 hill masses, median 10 ha, the largest 29% of
         // the raised ground, 97% of the floor one connected piece; tools/terrainreport.py "structure")
         public int Buttes;                  // how many (0 = no recipe: the usual continent / hills / mountains)
@@ -57,7 +60,7 @@ namespace CawPlus
         // river fork (#139, the tester: "a pointy island like Pittsburgh"): the second river joins the first beside the town
         // centre, so the town stands on the point between them; RiverIsland splits the river round an island below it
         public bool Fork, RiverIsland;
-        public float Meander = 1;
+        public float Meander = 1;           // x the rivers' bends (amplitude; the wavelength grows with it): Shang Simla's wind (#144)
         // despike (#140, #143, #147): summits narrower than ~2 x DespikeRadius are lowered towards the ground round them
         // (morphological opening), by Despike (0..1). EA's mountains are broad masses, ours had needle peaks
         public float Despike, DespikeRadius = 120;
@@ -67,14 +70,19 @@ namespace CawPlus
         public float KeepTop;
         // nile (#145 Al Simhara): with the valley recipe, the first river runs down the middle of the valley floor
         public bool Nile;
-        public bool TownLake;
-        public bool NoCurve;
+        public bool TownLake;               // the largest pond beside the town centre, the town built round it (Twinbrook, #141)
+        public bool NoCurve;                // heights scaled straight instead of by the world type's height curve, so a raised flat stays flat (#150)
         // raised plain (#150 Aurora Skies' lowland, #155 Bridgewood's town on a height): low land away from the water is
         // lifted by PlainLift metres, rising from the shore over PlainRamp metres (a tapered cliff); high land unchanged
         public float PlainLift, PlainRamp = 120;
-        // valley recipe (#151, #152): how many valleys out from the town, floor width and side run (m), how strongly
+        public float CragFloor = 3;         // no dissection below this height above the sea, full from ~22 m higher (Aurora Skies: its town lowland stays smooth)
+        // escarpment (the tester's 2026-10-26 Aurora Skies test: a cliff between lowland and highland, lakes on top with
+        // waterfalls over the edge): Scarp 0..1 narrows the Iceland highland's edge from ~250 m to ~25 m;
+        // ScarpLakes ponds go on the highland just behind the cliff
+        public float Scarp; public int ScarpLakes;
         public float Beaches = 1;           // < 1: fewer beaches (cliffs and rocky shore instead), the one by the town kept (#146)
-        public int Valleys; public float ValleyWidth = 360, ValleySide = 220, ValleyStrength = 0.9f, ValleyFloorLevel = 0.42f;                // heights scaled straight instead of by the world type's height curve, so a raised flat stays flat (#150)               // the largest pond beside the town centre, the town built round it (Twinbrook, #141)           // x the rivers' bends (amplitude; the wavelength grows with it): Shang Simla's wind (#144)
+        // valley recipe (#151, #152): how many valleys out from the town, floor width and side run (m), how strongly
+        public int Valleys; public float ValleyWidth = 360, ValleySide = 220, ValleyStrength = 0.9f, ValleyFloorLevel = 0.42f;
 
         /// <summary>The style fields from a worlds.txt style column ("crag=60,depth=12,terrace=0,step=20,talus=34,town=0.85,townsize=1").</summary>
         public void SetStyle(string style)
@@ -94,6 +102,9 @@ namespace CawPlus
                     case "talus": Talus = Math.Max(15, Math.Min(60, v)); break;
                     case "town": TownFlat = Math.Max(0, Math.Min(1, v)); break;
                     case "townsize": TownSize = Math.Max(0.4f, Math.Min(2.5f, v)); break;
+                    case "bumph": BumpHeight = Math.Max(0, Math.Min(10, v)); break;
+                    case "bumpw": BumpWidth = Math.Max(10, Math.Min(60, v)); break;
+                    case "bumpd": BumpDensity = Math.Max(0, Math.Min(12, v)); break;
                     case "buttes": Buttes = Math.Max(0, Math.Min(30, (int)v)); break;
                     case "butteha": ButteHa = Math.Max(1, Math.Min(80, v)); break;
                     case "tiers": Tiers = Math.Max(1, Math.Min(6, (int)v)); break;
@@ -106,7 +117,10 @@ namespace CawPlus
                     case "meander": Meander = Math.Max(0, Math.Min(5, v)); break;
                     case "despike": Despike = Math.Max(0, Math.Min(1, v)); break;
                     case "townlake": TownLake = v > 0; break;
+                    case "scarp": Scarp = Math.Max(0, Math.Min(1, v)); break;
+                    case "scarplakes": ScarpLakes = Math.Max(0, Math.Min(6, (int)v)); break;
                     case "beaches": Beaches = Math.Max(0, Math.Min(1, v)); break;
+                    case "cragfloor": CragFloor = Math.Max(0, Math.Min(200, v)); break;
                     case "valleys": Valleys = Math.Max(0, Math.Min(5, (int)v)); break;
                     case "vwidth": ValleyWidth = Math.Max(60, Math.Min(900, v)); break;
                     case "vside": ValleySide = Math.Max(40, Math.Min(700, v)); break;
@@ -130,13 +144,15 @@ namespace CawPlus
                 Crag, CragDepth, Terrace, TerraceStep, Talus, TownFlat, TownSize)
                 + (Buttes > 0 ? string.Format(c, ",buttes={0},butteha={1:0.#},tiers={2}", Buttes, ButteHa, Tiers) : "")
                 + (Massifs > 0 ? string.Format(c, ",massifs={0},massifha={1:0.#},largest={2:0.##},raised={3:0.##}", Massifs, MassifHa, MassifLargest, MassifRaised) : "")
+                + string.Format(c, ",bumph={0:0.##},bumpw={1:0.#},bumpd={2:0.##}", BumpHeight, BumpWidth, BumpDensity)
                 + (Round > 0 ? string.Format(c, ",round={0:0.##}", Round) : "")
                 + (Meander != 1 ? string.Format(c, ",meander={0:0.##}", Meander) : "")
                 + (Despike > 0 ? string.Format(c, ",despike={0:0.##},spiker={1:0}", Despike, DespikeRadius) : "")
                 + (KeepTop > 0 ? string.Format(c, ",keeptop={0:0.##}", KeepTop) : "") + (Nile ? ",nile=1" : "")
                 + (TownLake ? ",townlake=1" : "") + (NoCurve ? ",nocurve=1" : "")
                 + (PlainLift > 0 ? string.Format(c, ",plainlift={0:0},plainramp={1:0}", PlainLift, PlainRamp) : "")
-                + (Beaches < 1 ? string.Format(c, ",beaches={0:0.##}", Beaches) : "")
+                + (Scarp > 0 ? string.Format(c, ",scarp={0:0.##}", Scarp) : "") + (ScarpLakes > 0 ? ",scarplakes=" + ScarpLakes : "")
+                + (Beaches < 1 ? string.Format(c, ",beaches={0:0.##}", Beaches) : "") + (CragFloor != 3 ? string.Format(c, ",cragfloor={0:0}", CragFloor) : "")
                 + (Valleys > 0 ? string.Format(c, ",valleys={0},vwidth={1:0},vside={2:0},vstrength={3:0.##}", Valleys, ValleyWidth, ValleySide, ValleyStrength) + string.Format(c, ",vfloor={0:0.##}", ValleyFloorLevel) : "")
                 + (Fork ? ",fork=1" : "") + (RiverIsland ? ",island=1" : "");
         }
@@ -168,7 +184,7 @@ namespace CawPlus
 
         // ---------- gradient noise ----------
 
-        private sealed class Perlin
+        internal sealed class Perlin
         {
             private readonly int[] p = new int[512];
             public Perlin(int seed)
@@ -316,7 +332,7 @@ namespace CawPlus
                 {
                     float ca = (float)Math.Cos(coastAngle), sa = (float)Math.Sin(coastAngle);
                     float rI = (float)Math.Sqrt(u * u + v * v) + pn.Fbm(x / 350f + 600, y / 350f + 600, 3) * 0.10f;
-                    float rug = Smooth(-0.12f, 0.12f, u * ca + v * sa + 0.15f + pn.Fbm(x / 420f + 650, y / 420f + 650, 3) * 0.12f); // ~60% highland
+                    float rug = Smooth(-0.12f, 0.12f, IcelandEdge(pn, u, v, x, y, coastAngle)); // ~60% highland (the escarpment: ApplyScarp)
                     // highland: broad ridges plus crisp 160 m ridges everywhere (EA's Aurora Skies is craggy all over its
                     // highland, not a few smooth hills); lowland: flat with low hummocks
                     float crest = pn.Ridged(x / 220f + 1500, y / 220f + 1500, 4);
@@ -410,7 +426,7 @@ namespace CawPlus
             return h;
         }
 
-        public static float ValleyPlateau = 1.0f;
+        private const float ValleyPlateau = 1.0f;
 
         /// <summary>
         /// Valley recipe (#151 Dragon Valley, #152 Midnight Hollow): valleys run out from the town centre as rays (the first
@@ -454,7 +470,7 @@ namespace CawPlus
         /// <summary>
         /// Generate with the terrain checks: tries up to 'tries' variations of the seed (seed + k x 7919) on the planning
         /// grid, measures each as EA's worlds were measured and keeps the one passing most checks against 'target' (the
-        /// Like world's library/&lt;key&gt;_terrain.json), then generates it at 'size'. s.Seed is left at the variation kept.
+        /// world type's library/&lt;key&gt;_terrain.json), then generates it at 'size'. s.Seed is left at the variation kept.
         /// water: the water share to aim for. Without a target this is plain Generate.
         /// </summary>
         public static Result GenerateChecked(GenSettings s, int size, float worldSize, bool full, ProgressFn progress,
@@ -536,6 +552,7 @@ namespace CawPlus
             Grid coarseSmooth = coarse.Blur(60f / CoarseCell); // the broad shape, reused by the output grid
             ToMetres(coarse, flat, s, seaCut, top, CoarseCell, worldSize, landRanks, coarseSmooth);
             if (s.PlainLift > 0) LiftPlain(coarse, CoarseCell, s, pn);
+            if (s.Scarp > 0 && s.Coast == CoastType.Iceland) ApplyScarp(coarse, CoarseCell, s, pn, worldSize, coastAngle);
             // drainage valleys, worked out on the planning grid and applied to every grid the same way
             Grid spikes = s.Despike > 0 ? DespikeCut(coarse, s) : null;
             float keepBase = s.SeaLevel + s.PlainLift, keepGain = 1;
@@ -568,7 +585,7 @@ namespace CawPlus
             if (progress != null) progress("Shaping terrain", 13);
             if (s.Rivers > 0) res.Rivers = CarveRivers(coarse, s, rng, worldSize, pn, out res.TownHint);
             if (progress != null) progress("Shaping terrain", 17);
-            if (s.Ponds > 0) res.Ponds = PlacePonds(coarse, s, worldSize, new Random(s.Seed * 6311 + 17));
+            if (s.Ponds > 0 || s.ScarpLakes > 0) res.Ponds = PlacePonds(coarse, s, worldSize, new Random(s.Seed * 6311 + 17), pn, coastAngle);
             if (s.Valleys > 0 && res.TownHint == null) res.TownHint = TownCentre(s, worldSize); // the town on the valley floor
             if (s.TownLake && res.TownHint == null && res.Ponds.Count > 0)
             {
@@ -577,6 +594,7 @@ namespace CawPlus
                 if (Sq(res.Ponds[0][0] - tc[0]) + Sq(res.Ponds[0][1] - tc[1]) < Sq(0.12f * worldSize)) res.TownHint = tc;
             }
             foreach (float[] pond in res.Ponds) DigPond(coarse, CoarseCell, pond);
+            foreach (float[] pond in res.Ponds) FitPond(coarse, CoarseCell, pond);
             res.Coarse = coarse;
             if (progress != null) progress("Shaping terrain", 20);
             if (size <= 0) return res; // planning grid only (GenerateChecked's candidates)
@@ -615,6 +633,7 @@ namespace CawPlus
             if (DebugStage != null) DebugStage("relief", h);
             ToMetres(h, flatOut, s, seaCut, top, cell, worldSize, landRanks, smoothOut);
             if (s.PlainLift > 0) LiftPlain(h, cell, s, pn);
+            if (s.Scarp > 0 && s.Coast == CoastType.Iceland) ApplyScarp(h, cell, s, pn, worldSize, coastAngle);
             if (DebugStage != null) DebugStage("metres", h);
             // (softened a little first: the valley widening meets in sharp creases on the 8 m grid, which interpolated
             // onto a fine grid showed as an 8 m staircase along ridges)
@@ -653,13 +672,17 @@ namespace CawPlus
             if (full)
             {
                 if (progress != null) progress("Erosion", 75);
-                ThermalErosion(h, cell, s.Talus, 4);
+                ThermalErosion(h, cell, s.Talus, 4, s.Scarp > 0 && s.Coast == CoastType.Iceland ? ScarpFace(h, cell, s, pn, worldSize, coastAngle) : null);
             if (DebugStage != null) DebugStage("thermal", h);
                 if (progress != null) progress("Gullies", 85);
                 Gullies(h, cell, s);
             if (DebugStage != null) DebugStage("gullies", h);
             }
             FillPuddles(h, cell, s.SeaLevel, 1000f);
+            if (full) { RemoveSlivers(h, cell, s.SeaLevel, 8f); LiftLowland(h, cell, s.SeaLevel); }
+            if (full) { if (progress != null) progress("Rises and mounds", 92); TownBumps(h, cell, s, flatOut, pn); }
+            if (DebugStage != null) DebugStage("bumps", h);
+            foreach (float[] pond in res.Ponds) FitPond(h, cell, pond);
             res.Heights = h; res.Cell = cell;
             if (progress != null) progress("Terrain ready", 100);
             return res;
@@ -671,7 +694,7 @@ namespace CawPlus
             // (a hilly archipelago keeps its own islands: a town site levelled and kept dry there became one flat plain a
             // metre above the sea, as big as the rest of the land (Isla Paradiso); the road planner finds the flattest
             // island instead. Low island worlds do build their town on a flat island: Roaring Heights, land under 30 m.)
-            if (!s.CentralTown || s.Coast == CoastType.Islands && s.MaxHeight > 60 || s.Coast == CoastType.Volcano) return 0;
+            if (s.Coast == CoastType.Islands && s.MaxHeight > 60 || s.Coast == CoastType.Volcano) return 0;
             double[] t = TownLayout(s);
             float du = x / worldSize - 0.5f - (float)t[0], dv = y / worldSize - 0.5f - (float)t[1];
             float dist = (float)Math.Sqrt(du * du + dv * dv);
@@ -688,7 +711,6 @@ namespace CawPlus
             return c == CoastType.Island || c == CoastType.Islands || c == CoastType.Iceland || c == CoastType.Volcano || c == CoastType.Orleans;
         }
 
-        /// <summary>The sea's direction for a seed (shared by the terrain and the town site).</summary>
         /// <summary>A number 0..1 from the seed and 'k' (the same on every call, for per-seed shape choices made per pixel).</summary>
         private static float SeedHash(int seed, int k)
         {
@@ -828,6 +850,7 @@ namespace CawPlus
             }
         }
 
+        /// <summary>The sea's direction for a seed (shared by the terrain and the town site).</summary>
         private static float CoastAngle(GenSettings s, Random rng)
         {
             float a = (float)(rng.NextDouble() * Math.PI * 2);
@@ -857,7 +880,10 @@ namespace CawPlus
                 // a little inland of the coast: shift along the inland direction so the town sits on the land side
                 double ca = CoastAngle(s, new Random(s.Seed * 7919 + 13));
                 double along = u * Math.Cos(ca) + v * Math.Sin(ca);
-                double want = 0.05 + 0.12 * r.NextDouble();
+                // by the water, as EA's towns are (centre a median ~145 m from the sea, 50-430 m; library/*_districts.json):
+                // the shore sits about where the sea's share of the map ends, the town 0.07-0.16 of the map inland of it
+                double w = (s.SeaShare > 0 ? s.SeaShare : s.Water) / 100.0;
+                double want = Math.Max(-0.32, -0.5 + w) + 0.07 + 0.09 * r.NextDouble();
                 u += Math.Cos(ca) * (want - along); v += Math.Sin(ca) * (want - along);
             }
             else if (s.Coast == CoastType.Iceland)
@@ -887,7 +913,7 @@ namespace CawPlus
         /// <summary>The neighbourhood pockets alone (0..0.9).</summary>
         private static float Pocket(GenSettings s, float worldSize, float x, float y)
         {
-            if (!s.CentralTown || s.Pockets <= 0) return 0;
+            if (s.Pockets <= 0) return 0;
             double[] p = PocketLayout(s);
             float u = x / worldSize - 0.5f, v = y / worldSize - 0.5f, best = 0;
             for (int k = 0; k < p.Length; k += 4)
@@ -1186,6 +1212,37 @@ namespace CawPlus
             return o;
         }
 
+        /// <summary>
+        /// Rolling hills on the ground the generator levelled (#170, the tester: towns too flat; where there are no roads, put
+        /// hills): EA's town ground is broad smooth rises 100-150 m across with the lots and roads cut into flat shelves
+        /// among them (Sunset Valley, Appaloosa Plains, Twinbrook drawn side by side). Fine bumps and round mounds were
+        /// tried first: they matched EA's bump figures (library/town_detail.json) but looked like crumpled paper and
+        /// molehills. Smooth warped noise at ~5 x the World type's bump width, kept to its upper part (rises with gentle
+        /// ground between, no hollows to hold water), up to a few times its bump height, in calmer and rougher stretches
+        /// (350 m), scaled by how levelled the spot was (the flat mask: town site, pockets, flat zones; at least half) and
+        /// faded out within ~4 m of the sea. Build roads and Place lots level it under what they build.
+        /// </summary>
+        private static void TownBumps(Grid h, float cell, GenSettings s, Grid flat, Perlin pn)
+        {
+            if (s.BumpHeight <= 0 || s.BumpDensity <= 0) return;
+            int n = h.W;
+            float wl = s.BumpWidth * 5f * (float)Math.Sqrt(4.6f / Math.Max(0.5f, s.BumpDensity)); // ~120 m; denser = closer rises
+            for (int j = 0; j < n; j++)
+                for (int i = 0; i < n; i++)
+                {
+                    float x = i * cell, y = j * cell;
+                    float wx = x + 40 * pn.Fbm(x / 260f + 7100, y / 260f + 7100, 2), wy = y + 40 * pn.Fbm(x / 260f + 7300, y / 260f + 7300, 2);
+                    float r = Math.Max(0, pn.Fbm(wx / wl + 7500, wy / wl + 7500, 2) + 0.05f);
+                    if (r <= 0) continue;
+                    float w = Math.Max(0.5f, Math.Min(1, flat[i, j] * 1.5f));
+                    w *= 0.4f + 1.2f * Smooth(-0.35f, 0.35f, pn.Fbm(x / 350f + 7900, y / 350f + 7900, 2)); // calmer and rougher stretches
+                    int k = j * n + i;
+                    h.D[k] += BumpGain * s.BumpHeight * (float)Math.Pow(r, 1.3) * w * Smooth(s.SeaLevel + 0.5f, s.SeaLevel + 4f, h.D[k]);
+                }
+        }
+        /// <summary>Height of a full rise per metre of the World type's bump height.</summary>
+        public static float BumpGain = 5f;
+
         private static Grid FlatMask(Perlin pn, GenSettings s, float worldSize, int n, float cell)
         {
             Grid m = new Grid(n, n);
@@ -1236,7 +1293,7 @@ namespace CawPlus
                     }
                     else if (landRanks != null)
                     {
-                        // the Like world's own height distribution: this spot's share of the land below it -> its height
+                        // the world type's own height distribution: this spot's share of the land below it -> its height
                         // (fractional rank between the two nearest planning-grid values: a whole-number rank put thousands
                         // of tiny flat terraces into a 1 m map, seen as contour rings in the tester's v0.40 test)
                         int r = Array.BinarySearch(landRanks, v); if (r < 0) r = ~r;
@@ -1277,7 +1334,7 @@ namespace CawPlus
         /// the coast, rivers, the town centre, the map rim and each other. Each pond's water level is the lowest ground on its
         /// rim, so the hollow holds water. Radius varies 0.6-1.5 x PondRadius.
         /// </summary>
-        private static List<float[]> PlacePonds(Grid c, GenSettings s, float worldSize, Random rng)
+        private static List<float[]> PlacePonds(Grid c, GenSettings s, float worldSize, Random rng, Perlin pn, float coastAngle)
         {
             List<float[]> ponds = new List<float[]>();
             int n = c.W;
@@ -1305,6 +1362,46 @@ namespace CawPlus
                     break;
                 }
             }
+            // lakes on top of the escarpment, their shore a few metres behind the edge, each with a small plunge pool at the
+            // foot (EA's waterfalls run from pond to pond: Auto-Place's pond-step falls find these)
+            int lakes = 0;
+            int[] why = new int[6];
+            for (int tries = 0; tries < 6000 && lakes < s.ScarpLakes && s.Coast == CoastType.Iceland && s.Scarp > 0; tries++)
+            {
+                float x = 150 + (float)rng.NextDouble() * (worldSize - 300), z = 150 + (float)rng.NextDouble() * (worldSize - 300);
+                Func2 line = delegate (float px, float pz) { return IcelandEdge(pn, px / worldSize - 0.5f, pz / worldSize - 0.5f, px, pz, coastAngle) + ScarpWander(pn, px, pz); };
+                float e = line(x, z);
+                if (Math.Abs(e) > 0.03f) { why[0]++; continue; }
+                // onto the line (two Newton steps), n = towards the highland
+                float nx = 0, nz = 0;
+                for (int it = 0; it < 3; it++)
+                {
+                    float gx = (line(x + 10, z) - line(x - 10, z)) / 20f, gz = (line(x, z + 10) - line(x, z - 10)) / 20f, gg = gx * gx + gz * gz;
+                    if (gg < 1e-14f) break;
+                    e = line(x, z); x -= e * gx / gg; z -= e * gz / gg;
+                    float gl = (float)Math.Sqrt(gg); nx = gx / gl; nz = gz / gl;
+                }
+                if (nx == 0 && nz == 0 || Math.Abs(line(x, z)) > 0.002f) { why[1]++; continue; }
+                float r = s.PondRadius * (0.5f + 0.4f * (float)rng.NextDouble()), rp = 14f;
+                // (the outline's lobes reach 1.42 x r: kept on top of the cliff, its nearest shore a few metres from the lip)
+                float lx = x + nx * (ScarpHalf + 2 + 1.1f * r), lz = z + nz * (ScarpHalf + 2 + 1.1f * r);
+                float px2 = x - nx * (ScarpHalf + 2 + rp), pz2 = z - nz * (ScarpHalf + 2 + rp);
+                if (Math.Min(lx, lz) < r + 150 || Math.Max(lx, lz) > worldSize - r - 150 || Math.Min(px2, pz2) < 150 || Math.Max(px2, pz2) > worldSize - 150) continue;
+                if (TownSite(s, worldSize, lx, lz) > 0.2f || TownSite(s, worldSize, px2, pz2) > 0.2f) { why[2]++; continue; }
+                bool ok = true;
+                foreach (float[] q in ponds) if (Sq(q[0] - lx) + Sq(q[1] - lz) < Sq(q[2] + r + 200)) { ok = false; break; }
+                if (!ok) continue;
+                float rimMin, rimMax, pMin, pMax;
+                Rim(c, lx, lz, r, -nx, -nz, out rimMin, out rimMax); // not the side facing the cliff (the 8 m grid blurs it; the leak dam holds that edge)
+                Rim(c, px2, pz2, rp, nx, nz, out pMin, out pMax);
+                if (rimMin < s.SeaLevel + 15 || rimMax - rimMin > Math.Max(8, r * 0.4f)) { why[3]++; continue; }
+                if (pMin < s.SeaLevel + 3 || pMax - pMin > 4) { why[4]++; continue; }
+                if (rimMin - pMin < 14) { why[5]++; continue; }
+                ponds.Add(new[] { lx, lz, r, rimMin - 0.3f });
+                ponds.Add(new[] { px2, pz2, rp, pMin - 0.3f, 1 });
+                lakes++;
+            }
+            if (Environment.GetEnvironmentVariable("CAWSCARPDBG") != null) Console.WriteLine("scarp lakes " + lakes + ": far " + why[0] + ", line " + why[1] + ", town " + why[2] + ", lake rim " + why[3] + ", pool " + why[4] + ", drop " + why[5]);
             for (int tries = 0; tries < 800 && ponds.Count < s.Ponds; tries++)
             {
                 float r = s.PondRadius * (0.6f + 0.9f * (float)rng.NextDouble());
@@ -1324,38 +1421,324 @@ namespace CawPlus
                 }
                 // too steep a spot (a pond on a hillside needs a dam): the first tries want gentle ground, later ones accept
                 // the hollows of hilly worlds (EA's Lunar Lakes, Moonlight Falls)
-                if (!ok || rimMax - rimMin > Math.Max(4, r * (tries < 150 ? 0.12f : 0.35f))) continue;
+                if (!ok || rimMax - rimMin > Math.Max(4, r * (tries < 150 ? 0.12f : 0.22f))) continue;
                 ponds.Add(new[] { x, z, r, rimMin - 0.3f });
             }
             return ponds;
+        }
+
+        private delegate float Func2(float x, float z);
+
+        /// <summary>Lowest and highest ground round a circle, leaving out the side facing (sx, sz).</summary>
+        private static void Rim(Grid c, float x, float z, float r, float sx, float sz, out float lo, out float hi)
+        {
+            lo = float.MaxValue; hi = float.MinValue;
+            for (int k = 0; k < 24; k++)
+            {
+                double a = k * Math.PI * 2 / 24;
+                if (Math.Cos(a) * sx + Math.Sin(a) * sz > 0.5) continue;
+                float h = Sample(c, (x + (float)Math.Cos(a) * r) / CoarseCell, (z + (float)Math.Sin(a) * r) / CoarseCell);
+                lo = Math.Min(lo, h); hi = Math.Max(hi, h);
+            }
+        }
+
+        /// <summary>A generated pond's outline: distance from its middle as a share of its (lobed) radius; under 1 = water.
+        /// The radius varies with the direction by a few smooth lobes (the tester's v0.38 test: ponds showed as perfect circles),
+        /// phases from the pond's position, so every grid gets the same shape.</summary>
+        internal static float PondD(float[] q, float px, float pz)
+        {
+            float x = q[0], z = q[1], r = q[2];
+            double p1 = (x * 0.013 + z * 0.007) % 6.283, p2 = (x * 0.005 + z * 0.019) % 6.283, p3 = (x * 0.011 + z * 0.003) % 6.283;
+            float dx = px - x, dz = pz - z;
+            double a = Math.Atan2(dz, dx);
+            float lobes = 1 + 0.22f * (float)Math.Sin(2 * a + p1) + 0.13f * (float)Math.Sin(3 * a + p2) + 0.07f * (float)Math.Sin(5 * a + p3);
+            return (float)Math.Sqrt(dx * dx + dz * dz) / (r * lobes);
+        }
+
+        private static void FitPond(Grid g, float cell, float[] q)
+        {
+            // a plunge pool (q[4] = 1) keeps the cliff behind it: no bank shaping
+            FitPond(g, cell, q[0], q[1], q[2] * 1.45f, q[3], delegate (float x, float z) { float gh = g.At(x / cell, z / cell); return PondD(q, x, z) < 1 && gh < q[3] && gh > q[3] - 9; },
+                q.Length < 5 || q[4] == 0);
+        }
+
+        /// <summary>Whether (x, z) metres is meant to be under a pond's water.</summary>
+        public delegate bool InPond(float x, float z);
+
+        /// <summary>
+        /// Fits the land round a raised pond (water level 'level', middle (cx, cz), meant to stay within 'reach' m) to CAW's
+        /// pond, which floods out from its seed over all connected ground below the level (the tester's 2026-10-26 test:
+        /// a strip of water further down the hill, and vertical walls round the ponds):
+        /// 1. banks: ground outside the water no higher than a natural bank rising from the shore (about 10 deg at the
+        ///    water, 30 deg 20 m back, 45 deg 35 m back), so the shore is a slope, not a wall;
+        /// 2. no leaks: where ground below the level leads out of the pond (a gully, a dip in the rim), a low dam half a
+        ///    metre above the water closes it, eased back into the land.
+        /// </summary>
+        public static void FitPond(Grid g, float cell, float cx, float cz, float reach, float level, InPond inside) { FitPond(g, cell, cx, cz, reach, level, inside, true); }
+
+        public static void FitPond(Grid g, float cell, float cx, float cz, float reach, float level, InPond inside, bool banks)
+        {
+            if (Environment.GetEnvironmentVariable("CAWNOFITPOND") != null) return; // offline before/after checks
+            const float Bank = 80f;
+            int x0 = Math.Max(0, (int)((cx - reach - Bank) / cell)), x1 = Math.Min(g.W - 1, (int)((cx + reach + Bank) / cell) + 1);
+            int z0 = Math.Max(0, (int)((cz - reach - Bank) / cell)), z1 = Math.Min(g.H - 1, (int)((cz + reach + Bank) / cell) + 1);
+            int w = x1 - x0 + 1, hgt = z1 - z0 + 1;
+            if (w < 3 || hgt < 3) return;
+            bool[] wet = new bool[w * hgt];
+            float[] e = new float[w * hgt];
+            for (int j = 0; j < hgt; j++)
+                for (int i = 0; i < w; i++)
+                {
+                    wet[j * w + i] = inside((x0 + i) * cell, (z0 + j) * cell);
+                    e[j * w + i] = wet[j * w + i] ? 0 : 1e9f;
+                }
+            // distance from the water (chamfer, metres)
+            float d1 = cell, d2 = cell * 1.41421f;
+            for (int j = 0; j < hgt; j++)
+                for (int i = 0; i < w; i++)
+                {
+                    int k = j * w + i; float v = e[k];
+                    if (i > 0) v = Math.Min(v, e[k - 1] + d1);
+                    if (j > 0) { v = Math.Min(v, e[k - w] + d1); if (i > 0) v = Math.Min(v, e[k - w - 1] + d2); if (i < w - 1) v = Math.Min(v, e[k - w + 1] + d2); }
+                    e[k] = v;
+                }
+            for (int j = hgt - 1; j >= 0; j--)
+                for (int i = w - 1; i >= 0; i--)
+                {
+                    int k = j * w + i; float v = e[k];
+                    if (i < w - 1) v = Math.Min(v, e[k + 1] + d1);
+                    if (j < hgt - 1) { v = Math.Min(v, e[k + w] + d1); if (i < w - 1) v = Math.Min(v, e[k + w + 1] + d2); if (i > 0) v = Math.Min(v, e[k + w - 1] + d2); }
+                    e[k] = v;
+                }
+            // the water's own edge: ground under the water shelves down from the shore (erosion after the bowl was dug
+            // can pile earth back into its edge: 10 m mounds inside Aurora Skies' ponds)
+            float[] ei = new float[w * hgt];
+            for (int k = 0; k < ei.Length; k++) ei[k] = wet[k] ? 1e9f : 0;
+            for (int j = 0; j < hgt; j++)
+                for (int i = 0; i < w; i++)
+                {
+                    int k = j * w + i; float v = ei[k];
+                    if (i > 0) v = Math.Min(v, ei[k - 1] + d1);
+                    if (j > 0) { v = Math.Min(v, ei[k - w] + d1); if (i > 0) v = Math.Min(v, ei[k - w - 1] + d2); if (i < w - 1) v = Math.Min(v, ei[k - w + 1] + d2); }
+                    ei[k] = v;
+                }
+            for (int j = hgt - 1; j >= 0; j--)
+                for (int i = w - 1; i >= 0; i--)
+                {
+                    int k = j * w + i; float v = ei[k];
+                    if (i < w - 1) v = Math.Min(v, ei[k + 1] + d1);
+                    if (j < hgt - 1) { v = Math.Min(v, ei[k + w] + d1); if (i < w - 1) v = Math.Min(v, ei[k + w + 1] + d2); if (i > 0) v = Math.Min(v, ei[k + w - 1] + d2); }
+                    ei[k] = v;
+                }
+            for (int j = 0; j < hgt; j++)
+                for (int i = 0; i < w; i++)
+                {
+                    int k = j * w + i;
+                    if (!wet[k]) continue;
+                    float cap = level + 0.2f - 0.15f * ei[k];
+                    if (g[x0 + i, z0 + j] > cap) g[x0 + i, z0 + j] = cap;
+                }
+            // 1. natural banks
+            for (int j = 0; j < hgt; j++)
+                for (int i = 0; i < w; i++)
+                {
+                    int k = j * w + i;
+                    if (!banks || wet[k] || e[k] > Bank) continue;
+                    // ~7 deg at the water, ~30 deg 30 m back; faded out by 45 m so it never leaves a cut face in a hill
+                    float cap = level + 0.3f + 0.12f * e[k] + 0.008f * e[k] * e[k];
+                    float h0 = g[x0 + i, z0 + j];
+                    if (h0 > cap) g[x0 + i, z0 + j] = Lerp(cap, h0, Smooth(10f, 45f, e[k]));
+                }
+            // 2. leaks: flood from the pond's lowest wet cell as CAW does; dry ground reached is dammed
+            // (eight neighbours: CAW's water also runs corner to corner, the tester's v1.3.2 test: a pond on Aurora Skies' cliff top
+            // leaked through a diagonal gap in its rim and flooded the map to 69 m)
+            for (int round = 0; round < 8; round++)
+            {
+                // from every wet cell under the level, not just the lowest: CAW seeds the flood at the pond's centre, and a
+                // pond can stand in two hollows (Aurora Skies seed 5: the centre's hollow leaked, the lowest one didn't)
+                bool[] seen = new bool[w * hgt];
+                List<int> leaks = new List<int>();
+                Queue<int> open = new Queue<int>();
+                for (int k = 0; k < wet.Length; k++)
+                    if (wet[k] && g[x0 + k % w, z0 + k / w] < level) { open.Enqueue(k); seen[k] = true; }
+                if (open.Count == 0) return;
+                while (open.Count > 0)
+                {
+                    int k = open.Dequeue(), i = k % w, j = k / w;
+                    if (!wet[k] || i == 0 || j == 0 || i == w - 1 || j == hgt - 1) { leaks.Add(k); continue; }
+                    int[] nb = { k - 1, k + 1, k - w, k + w, k - w - 1, k - w + 1, k + w - 1, k + w + 1 };
+                    foreach (int n in nb)
+                        if (!seen[n] && g[x0 + n % w, z0 + n / w] < level + 0.3f) { seen[n] = true; open.Enqueue(n); }
+                }
+                if (leaks.Count == 0) return;
+                // a narrow dam (its outer face ~60 deg): a wide one built out over a cliff below the lip (an escarpment
+                // lake) as a mound tens of metres across
+                int rad = (int)Math.Ceiling(8f / cell);
+                foreach (int k in leaks)
+                {
+                    int i = k % w, j = k / w;
+                    for (int b = Math.Max(0, j - rad); b <= Math.Min(hgt - 1, j + rad); b++)
+                        for (int a = Math.Max(0, i - rad); a <= Math.Min(w - 1, i + rad); a++)
+                        {
+                            if (wet[b * w + a]) continue;
+                            float d = (float)Math.Sqrt((a - i) * (a - i) + (b - j) * (b - j)) * cell;
+                            float want = level + 0.5f - Math.Max(0, d - Math.Max(2.5f, cell)) * 1.7f;
+                            if (g[x0 + a, z0 + b] < want) g[x0 + a, z0 + b] = want;
+                        }
+                }
+            }
         }
 
         /// <summary>Digs a pond's bowl: up to ~3 m (bigger ponds deeper, max 6 m) below its water level in the middle.</summary>
         private static void DigPond(Grid g, float cell, float[] q)
         {
             float x = q[0], z = q[1], r = q[2], level = q[3], depth = Math.Min(6f, 1.5f + r / 40f);
-            // an irregular outline (the tester's v0.38 test: ponds showed as perfect circles): the radius varies with the
-            // direction by a few smooth lobes, phases from the pond's position, so every grid digs the same shape
-            double p1 = (x * 0.013 + z * 0.007) % 6.283, p2 = (x * 0.005 + z * 0.019) % 6.283, p3 = (x * 0.011 + z * 0.003) % 6.283;
             float reach = r * 1.4f;
             int x0 = Math.Max(0, (int)((x - reach) / cell)), x1 = Math.Min(g.W - 1, (int)((x + reach) / cell) + 1);
             int z0 = Math.Max(0, (int)((z - reach) / cell)), z1 = Math.Min(g.H - 1, (int)((z + reach) / cell) + 1);
             for (int j = z0; j <= z1; j++)
                 for (int i = x0; i <= x1; i++)
                 {
-                    float dx = i * cell - x, dz = j * cell - z;
-                    double a = Math.Atan2(dz, dx);
-                    float lobes = 1 + 0.22f * (float)Math.Sin(2 * a + p1) + 0.13f * (float)Math.Sin(3 * a + p2) + 0.07f * (float)Math.Sin(5 * a + p3);
-                    float d = (float)Math.Sqrt(dx * dx + dz * dz) / (r * lobes);
+                    float d = PondD(q, i * cell, j * cell);
                     if (d >= 1) continue;
                     float bed = level - 0.4f - depth * (1 - d * d);
                     // the shore: the last 25% rises gently to the water line, so the edge is a soft bank
                     if (d > 0.75f) bed = Lerp(bed, level + 0.2f, Smooth(0.75f, 1f, d));
-                    g[i, j] = Math.Min(g[i, j], bed);
+                    // the water takes the land's shape: ground standing well above the level stays as the shore
+                    // (digging the whole outline cut a bowl into hillsides: the tester's 2026-10-26 test, "like a crater");
+                    // the middle is always dug, so CAW's pond seed is under water
+                    float orig = g[i, j];
+                    float wgt = Math.Max(1 - Smooth(10f, 20f, orig - level), 1 - Smooth(0.3f, 0.5f, d));
+                    g[i, j] = Lerp(orig, Math.Min(orig, bed), wgt);
                 }
         }
 
-        /// <summary>The land's relief values in order (for the Like world's height curve), or null without a curve.</summary>
+        /// <summary>The Iceland coast's highland/lowland line: over 0 = highland side (map units, ~0.1 = 200 m on a 2 km map).</summary>
+        private static float IcelandEdge(Perlin pn, float u, float v, float x, float y, float coastAngle)
+        {
+            float ca = (float)Math.Cos(coastAngle), sa = (float)Math.Sin(coastAngle);
+            return u * ca + v * sa + IcelandSplit + pn.Fbm(x / 420f + 650, y / 420f + 650, 3) * 0.12f;
+        }
+
+        private const float ScarpHalf = 6f; // m: half the cliff's width (a 75-80 deg face, as EA's pond-step falls)
+        private static float ScarpWander(Perlin pn, float x, float y) { return pn.Fbm(x / 130f + 2650, y / 130f + 2650, 2) * 0.012f; }
+
+        /// <summary>Cells on the escarpment's face (kept steep by the thermal erosion).</summary>
+        private static bool[] ScarpFace(Grid g, float cell, GenSettings s, Perlin pn, float worldSize, float coastAngle)
+        {
+            bool[] m = new bool[g.D.Length];
+            float band = 1.6f * ScarpHalf / worldSize;
+            for (int j = 0; j < g.H; j++)
+                for (int i = 0; i < g.W; i++)
+                {
+                    float x = i * cell, y = j * cell;
+                    float e = IcelandEdge(pn, x / worldSize - 0.5f, y / worldSize - 0.5f, x, y, coastAngle);
+                    if (Math.Abs(e) > 0.02f) continue;
+                    m[j * g.W + i] = Math.Abs(e + ScarpWander(pn, x, y)) < band && g[i, j] > s.SeaLevel + 1;
+                }
+            return m;
+        }
+
+        /// <summary>
+        /// The Iceland highland's edge as a cliff (the tester's 2026-10-26 Aurora Skies test: lowland and highland distinct,
+        /// a cliff drop between them with lakes on top and waterfalls over it). The broad rise of the relief is swapped
+        /// for a step about 12 m across, Scarp x 48 m high, its line wandering; the lowland at its foot is never pushed
+        /// down to the sea.
+        /// </summary>
+        private static void ApplyScarp(Grid g, float cell, GenSettings s, Perlin pn, float worldSize, float coastAngle)
+        {
+            float H = 48f * s.Scarp;
+            for (int j = 0; j < g.H; j++)
+                for (int i = 0; i < g.W; i++)
+                {
+                    float hh = g[i, j];
+                    if (hh < s.SeaLevel + 0.5f) continue;
+                    float x = i * cell, y = j * cell;
+                    float e = IcelandEdge(pn, x / worldSize - 0.5f, y / worldSize - 0.5f, x, y, coastAngle);
+                    if (e < -0.14f || e > 0.14f) continue;
+                    float es = e + ScarpWander(pn, x, y);
+                    // in metres across the line (the noise terms change the line's gradient)
+                    float gx = (IcelandEdge(pn, (x + 2) / worldSize - 0.5f, y / worldSize - 0.5f, x + 2, y, coastAngle) + ScarpWander(pn, x + 2, y) - es) / 2f;
+                    float gy = (IcelandEdge(pn, x / worldSize - 0.5f, (y + 2) / worldSize - 0.5f, x, y + 2, coastAngle) + ScarpWander(pn, x, y + 2) - es) / 2f;
+                    float gl = Math.Max(1e-7f, (float)Math.Sqrt(gx * gx + gy * gy));
+                    float d = H * (Smooth(-ScarpHalf, ScarpHalf, es / gl) - Smooth(-0.12f, 0.12f, e));
+                    float nh = hh + d;
+                    if (d < 0) nh = Math.Max(nh, Math.Min(hh, s.SeaLevel + 3f));
+                    g[i, j] = nh;
+                }
+        }
+
+        /// <summary>Distance (m) from every cell to the nearest seed cell (chamfer).</summary>
+        private static float[] Chamfer(bool[] seed, int w, int hh, float cell)
+        {
+            int N = w * hh; float[] d = new float[N];
+            for (int i = 0; i < N; i++) d[i] = seed[i] ? 0 : 1e9f;
+            float d1 = cell, d2 = cell * 1.4142f;
+            for (int y = 0; y < hh; y++)
+                for (int x = 0; x < w; x++)
+                {
+                    int i = y * w + x; float v = d[i];
+                    if (x > 0) v = Math.Min(v, d[i - 1] + d1);
+                    if (y > 0) { v = Math.Min(v, d[i - w] + d1); if (x > 0) v = Math.Min(v, d[i - w - 1] + d2); if (x < w - 1) v = Math.Min(v, d[i - w + 1] + d2); }
+                    d[i] = v;
+                }
+            for (int y = hh - 1; y >= 0; y--)
+                for (int x = w - 1; x >= 0; x--)
+                {
+                    int i = y * w + x; float v = d[i];
+                    if (x < w - 1) v = Math.Min(v, d[i + 1] + d1);
+                    if (y < hh - 1) { v = Math.Min(v, d[i + w] + d1); if (x < w - 1) v = Math.Min(v, d[i + w + 1] + d2); if (x > 0) v = Math.Min(v, d[i + w - 1] + d2); }
+                    d[i] = v;
+                }
+            return d;
+        }
+
+        /// <summary>
+        /// Land narrower than about 2 x halfWidth standing in the water (a fin left between two fjord or river cuts:
+        /// the tester's 2026-10-26 test) goes under the water: a morphological opening of the land, eased over a few metres.
+        /// </summary>
+        private static void RemoveSlivers(Grid h, float cell, float sea, float halfWidth)
+        {
+            int w = h.W, hh = h.H, N = w * hh;
+            bool[] water = new bool[N];
+            for (int i = 0; i < N; i++) water[i] = h.D[i] < sea;
+            float[] dw = Chamfer(water, w, hh, cell);
+            bool[] core = new bool[N];
+            for (int i = 0; i < N; i++) core[i] = dw[i] >= halfWidth;
+            float[] dc = Chamfer(core, w, hh, cell);
+            float[] cut = new float[N];
+            int n = 0;
+            for (int i = 0; i < N; i++)
+                if (!water[i] && dc[i] > halfWidth + cell * 1.5f) { cut[i] = h.D[i] - (sea - 1.2f); n++; }
+            if (n == 0) return;
+            // soften the cut's edge (where a fin meets the hillside)
+            Grid c = new Grid(w, hh); Array.Copy(cut, c.D, N);
+            c = c.Blur(Math.Max(1f, 3f / cell));
+            for (int i = 0; i < N; i++)
+            {
+                float k = Math.Max(cut[i], Math.Min(c.D[i], h.D[i] - sea + 0.6f));
+                if (k > 0 && !water[i]) h.D[i] -= k;
+            }
+        }
+
+        /// <summary>
+        /// Flat land just above the sea is lifted a little away from the shore: CAW's water and waves seem to cover ground
+        /// within about a metre of the sea level (the tester's 2026-10-26 test, "water slightly too high"). The shore itself
+        /// keeps its gentle slope; 30 m inland ground under 2.5 m above the sea is up to 1.2 m higher.
+        /// </summary>
+        private static void LiftLowland(Grid h, float cell, float sea)
+        {
+            bool[] wet = new bool[h.D.Length];
+            for (int i = 0; i < wet.Length; i++) wet[i] = h.D[i] < sea + 0.2f;
+            float[] d = Chamfer(wet, h.W, h.H, cell);
+            for (int i = 0; i < h.D.Length; i++)
+            {
+                float a = h.D[i] - sea;
+                if (a < 0 || a > 2.5f) continue;
+                h.D[i] += 1.2f * Smooth(0f, 30f, d[i]) * (1 - a / 2.5f);
+            }
+        }
+
         /// <summary>The height curve at fractional knot q, smooth through the knots (monotone cubic: no creases, so no
         /// contour lines where the slope of the curve changes; never overshoots between knots).</summary>
         private static float CurveAt(float[] c, float q)
@@ -1375,6 +1758,7 @@ namespace CawPlus
             return 2 * a * b / (a + b);                // harmonic mean (Fritsch-Carlson style)
         }
 
+        /// <summary>The land's relief values in order (for the world type's height curve), or null without a curve.</summary>
         private static float[] LandRanks(Grid coarse, Grid flat, GenSettings s, float seaCut)
         {
             if (s.HeightCurve == null || s.HeightCurve.Length < 2) return null;
@@ -1395,10 +1779,6 @@ namespace CawPlus
             return o;
         }
 
-        /// <summary>
-        /// Raises hollows below the sea that don't reach the map edge to just above it (no inland lakes); returns where
-        /// it did (1), for the output grid.
-        /// </summary>
         /// <summary>
         /// Evens out ground within a few metres of the sea level towards its 40 m average, so the coastline follows broad
         /// forms instead of every small bump (the tester's v0.38 test; EA's coastlines are 1.4-10 times a circle's length,
@@ -1520,8 +1900,10 @@ namespace CawPlus
         // ---------- rivers ----------
 
         /// <summary>
-        /// Rivers follow the steepest way down from high ground to the sea (or the world edge), on the 8 m grid, then
-        /// are carved to just below sea level so Sims 3 fills them with water.
+        /// Rivers on the 8 m grid: on mainland coasts each runs in from a map edge along the lowest ground to the sea, a
+        /// lake or an earlier river (ThroughRiver; the fork and Nile recipes first); otherwise the longest descent from a
+        /// low source, or a river in from the edge (EdgeRiver). Each is carved to just below sea level so Sims 3 fills it
+        /// with water.
         /// </summary>
         private static List<List<float[]>> CarveRivers(Grid c, GenSettings s, Random rng, float worldSize, Perlin pn, out float[] townHint)
         {
@@ -1539,7 +1921,6 @@ namespace CawPlus
                 // stopped halfway)
                 if (!IsIslandCoast(s.Coast))
                 {
-                    // the fork: the second river may only end on the first, within ~120 m of the point nearest the town
                     // nile: the first river runs down the middle of the first valley's floor, from the far map edge to the
                     // sea (Al Simhara, #145: found its own way, it often left the valley)
                     if (k == 0 && s.Nile && s.Valleys > 0 && s.Coast == CoastType.OceanSide)
@@ -1599,13 +1980,13 @@ namespace CawPlus
             return rivers;
         }
 
+        private const float DespikeFloor = 0.3f;
+
         /// <summary>
         /// How much to lower each cell so peaks become broad: the opening (min then max over DespikeRadius) is the ground
         /// with every summit narrower than ~2 x the radius removed; the cut is Despike x (height - opening), smoothed so
         /// the lowered tops are rounded, never below the sea.
         /// </summary>
-        public static float DespikeFloor = 0.3f;
-
         private static Grid DespikeCut(Grid c, GenSettings s)
         {
             int n = c.W, r = Math.Max(2, (int)(s.DespikeRadius / CoarseCell));
@@ -1692,8 +2073,8 @@ namespace CawPlus
             return 2;
         }
 
-        public static float ForkAngle = 60f, ForkWedge = 32f, ForkNear = 60f;
-        public static float ForkReach = 120f, IslandLength = 420f, IslandWidth = 70f;
+        private const float ForkAngle = 60f, ForkWedge = 32f, ForkNear = 60f;
+        private const float IslandLength = 420f, IslandWidth = 70f;
 
         /// <summary>
         /// A side channel that leaves the river and rejoins it further down, so an island stands between them (EA's
@@ -1816,7 +2197,7 @@ namespace CawPlus
         /// other rivers' ends and the end edge) with the longest, lowest route; the course runs from it to the end.
         /// Null if no route of at least a quarter of the map's size exists.
         /// </summary>
-        public static float RiverEndLakeM2 = 25000; // a lake a river may end in: at least 2.5 ha
+        private const float RiverEndLakeM2 = 25000; // a lake a river may end in: at least 2.5 ha
 
         /// <summary>Cells below 'level' that belong to the sea (joined to the map edge) or to a water body of at least minCells.</summary>
         private static bool[] BigWater(Grid g, float level, int minCells)
@@ -2125,19 +2506,20 @@ namespace CawPlus
         /// <summary>Rivers narrower in small worlds (full size from 1536 m up).</summary>
         private static float RiverScale(float worldSize) { return Math.Max(0.55f, Math.Min(1.15f, (float)Math.Sqrt(worldSize / 1536f))); }
 
+        // valley walls beyond the floodplain: how far (m) and how steep (rise per m). 110 m at 0.30 (~17 deg) cut a trench
+        // through every hill a river crosses (the tester, #139: "carved with a spoon")
+        public static float Wall = 110f, WallSlope = 0.45f, PlainWidth = 1f; // 0.45: as close to EA as the old 0.30 (seeds 7-12)
+        private const float WallMax = 700f;
+        // channel half-width at the source (x3 at the mouth) and bank run per metre of rise: EA's river water is 20-60 m
+        // wide; wider than ~60 m it reads as sea (tools/Fidelity: Riverview's generated rivers measured as sea)
+        public static float RiverHalf = 2f, RiverBankRun = 3f; // swept on 4 river worlds (seeds 7-9)
+
         /// <summary>
         /// Carves a river into its valley: a gully at the source that deepens until the bed drops below sea level (where
         /// Sims 3 shows water), a channel that widens downstream with an uneven width and ragged edges, a steep bank on
         /// the outside of bends and a gently shelving one (point bar) inside, and a flat floodplain alongside that
         /// widens towards the mouth. Ground is only ever lowered.
         /// </summary>
-        // valley walls beyond the floodplain: how far (m) and how steep (rise per m). 110 m at 0.30 (~17 deg) cut a trench
-        // through every hill a river crosses (the tester, #139: "carved with a spoon")
-        public static float Wall = 110f, WallSlope = 0.45f, PlainWidth = 1f, WallMax = 700f; // 0.45: as close to EA as the old 0.30 (seeds 7-12)
-        // channel half-width at the source (x3 at the mouth) and bank run per metre of rise: EA's river water is 20-60 m
-        // wide; wider than ~60 m it reads as sea (tools/Fidelity: Riverview's generated rivers measured as sea)
-        public static float RiverHalf = 2f, RiverBankRun = 3f; // swept on 4 river worlds (seeds 7-9)
-
         private static void CarveChannel(Grid g, float cell, List<float[]> river, GenSettings s, float worldSize, Perlin pn)
         {
             int n = river.Count;
@@ -2519,7 +2901,8 @@ namespace CawPlus
 
         // ---------- erosion ----------
 
-        /// <summary>Moves material down slopes steeper than 'talus' degrees (softens cliffs and noise artefacts).</summary>
+        private const float GullyDrops = 0.35f, GullyMaxCut = 2.5f; // drops per cell at Erosion 100; deepest cut (m)
+
         /// <summary>
         /// Fine water erosion on the full map: small branching gullies down the slopes, as hand-made and EA worlds have
         /// (Bridgewood's hills; the tester's v0.40 test: our hills looked polished). Raindrops are dropped at random on a
@@ -2528,8 +2911,6 @@ namespace CawPlus
         /// change is capped per cell, then added back to the map smoothly. Strength follows the Erosion slider; water and
         /// ground right by the sea are left alone. Deterministic per seed.
         /// </summary>
-        public static float GullyDrops = 0.35f, GullyMaxCut = 2.5f; // drops per cell at Erosion 100; deepest cut (m)
-
         public static void Gullies(Grid h, float cell, GenSettings s)
         {
             float amount = Math.Max(0, Math.Min(1, s.Erosion / 100f));
@@ -2672,29 +3053,17 @@ namespace CawPlus
                 // channel depth: from DissectMinArea of catchment, growing with the catchment (log), on sloping ground
                 // only, never deeper than half the height above the sea
                 float part = depth * round / 3f;
-                if (Environment.GetEnvironmentVariable("CAWAREA") != null && round == 3)
-                    using (System.IO.FileStream fs = System.IO.File.Create(Environment.GetEnvironmentVariable("CAWAREA")))
-                    {
-                        byte[] hd = System.Text.Encoding.ASCII.GetBytes("P5 " + n + " " + n + " 255\n"); fs.Write(hd, 0, hd.Length);
-                        for (int i = 0; i < N; i++) fs.WriteByte((byte)Math.Min(255, Math.Log(area[i]) * 25));
-                    }
                 if (Environment.GetEnvironmentVariable("CAWDBG") != null) { int ca = 0, cs = 0, cl = 0; for (int i = 0; i < N; i++) { if (w.D[i] > sea + 1) cl++; if (area[i] >= a0 && w.D[i] > sea + 1) { ca++; if (slope[i] > 0.05f) cs++; } } Console.Error.WriteLine("DBG round " + round + " land " + cl + " channel cells " + ca + " sloped " + cs); }
                 for (int i = 0; i < N; i++)
                 {
                     if (area[i] < a0 || w.D[i] < sea + 1) continue;
                     float g = (float)(Math.Log(area[i] / a0) / Math.Log(a1 / a0));
-                    float c = part * (0.3f + 0.7f * Math.Min(1, g)) * (0.4f + 0.6f * Smooth(0, DissectSlope, slope[i])) * Smooth(3, 25, w.D[i] - sea);
+                    float c = part * (0.3f + 0.7f * Math.Min(1, g)) * (0.4f + 0.6f * Smooth(0, DissectSlope, slope[i])) * Smooth(s.CragFloor, s.CragFloor + 22, w.D[i] - sea);
                     cut.D[i] = Math.Max(cut.D[i], Math.Min(c, 0.5f * (w.D[i] - sea)));
                 }
             }
             cut = Widen(cut, C);
             if (DebugStage != null) DebugStage("dissectcut", cut);
-            if (Environment.GetEnvironmentVariable("CAWCUT") != null)
-                using (System.IO.FileStream fs = System.IO.File.Create(Environment.GetEnvironmentVariable("CAWCUT")))
-                {
-                    byte[] hd = System.Text.Encoding.ASCII.GetBytes("P5 " + n + " " + n + " 255\n"); fs.Write(hd, 0, hd.Length);
-                    for (int i = 0; i < N; i++) fs.WriteByte((byte)Math.Min(255, cut.D[i] * 20));
-                }
             if (Environment.GetEnvironmentVariable("CAWDBG") != null) { int c5 = 0; float mx = 0; foreach (float v in cut.D) { if (v > 2) c5++; mx = Math.Max(mx, v); } Console.Error.WriteLine("DBG dissect: depth " + depth + " max " + mx + " share>2m " + (float)c5 / N); }
             cut = cut.Blur(0.7f); // a rounded floor instead of a 4 m crease
             for (int j = 0; j < n; j++)
@@ -2731,12 +3100,18 @@ namespace CawPlus
             return cut;
         }
 
-        public static float OrleansSpacing = 340f, OrleansChannel = 34f, OrleansGate = -0.02f; // channel 34 (was 24): EA's channels are wide water, 24 m ones counted as rivers (water score 70.0 -> 74.4, seeds 10-15)
-        public static float IcelandCrest = 0.12f, IcelandLowland = 0.04f, IcelandDrop = 0.55f;
-        public static float DissectNoise = 4f, DissectMinArea = 150f, DissectWall = 1.0f, DissectSlope = 0.06f; // m; m2 of catchment where a gully starts; wall drop per m
+        private const float OrleansGate = -0.02f;
+        public static float OrleansSpacing = 340f, OrleansChannel = 34f; // channel 34 (was 24): EA's channels are wide water, 24 m ones counted as rivers (water score 70.0 -> 74.4, seeds 10-15)
+        private const float IcelandCrest = 0.12f, IcelandLowland = 0.04f, IcelandDrop = 0.55f;
+        internal static float IcelandSplit = 0.15f; // moves the highland/lowland line: larger = more highland
+        public static float DissectNoise = 4f, DissectMinArea = 150f, DissectWall = 1.0f; // m; m2 of catchment where a gully starts; wall drop per m
+        private const float DissectSlope = 0.06f;
 
+        /// <summary>Moves material down slopes steeper than 'talus' degrees (softens cliffs and noise artefacts).</summary>
+        public static void ThermalErosion(Grid g, float cell, float talusDeg, int iterations) { ThermalErosion(g, cell, talusDeg, iterations, null); }
 
-        public static void ThermalErosion(Grid g, float cell, float talusDeg, int iterations)
+        /// <summary>As above; cells marked in 'keep' (an escarpment's face) neither give nor take material.</summary>
+        public static void ThermalErosion(Grid g, float cell, float talusDeg, int iterations, bool[] keep)
         {
             float maxDiff = (float)Math.Tan(talusDeg * Math.PI / 180) * cell;
             int W = g.W, H = g.H;
@@ -2748,10 +3123,12 @@ namespace CawPlus
                     for (int x = 1; x < W - 1; x++)
                     {
                         int i = y * W + x;
+                        if (keep != null && keep[i]) continue;
                         float h = g.D[i];
                         int[] nb = { i - 1, i + 1, i - W, i + W };
                         foreach (int k in nb)
                         {
+                            if (keep != null && keep[k]) continue;
                             float d = h - g.D[k];
                             if (d > maxDiff) { float m = (d - maxDiff) * 0.2f; delta[i] -= m; delta[k] += m; }
                         }
@@ -2767,11 +3144,7 @@ namespace CawPlus
         /// any road is graded. Before, the strip was graded only at the road's stored points (up to 30 m apart) and
         /// smoothed by point count, which left steps along the road (the tester, 2026-10-24). Water (a river under a bridge)
         /// is left alone: the road's level over it is bridged between the banks.
-        /// </summary>
-        public static void GradeRoads(Grid g, float cell, List<List<float[]>> roads, float sea) { GradeRoads(g, cell, roads, sea, null, 0); }
-
-        /// <summary>
-        /// As above; with bridges (bank to bank, metres, as RoadNet.Bridges) the road is also held at each bridge's deck
+        /// With bridges (bank to bank, metres, as RoadNet.Bridges) the road is also held at each bridge's deck
         /// height along the bridge object (bridgeLength m, centred on the crossing) and ramped back to its own profile
         /// beyond (at most ~7%), so the land meets the deck at both ends: CAW drapes roads on the terrain, and a deck left
         /// above the bank stood as a step over its approach road (the tester, 2026-10-25, #131). The deck height is
@@ -2911,7 +3284,7 @@ namespace CawPlus
         }
 
         // a dead end's last metres held level, and the radius of the level pad round it for its end cap (#135)
-        public static float DeadEndFlat = 16f, DeadEndPad = 10f;
+        private const float DeadEndFlat = 16f, DeadEndPad = 10f;
 
         /// <summary>A bridge's deck height (m): level with its higher bank end, at least 1.5 m over the sea.</summary>
         public static float BridgeDeck(Grid g, float cell, float[] b, float bridgeLength, float sea)
@@ -3012,12 +3385,7 @@ namespace CawPlus
             return 0.5f * (2 * p1 + (p2 - p0) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t * t + (3 * p1 - p0 - 3 * p2 + p3) * t * t * t);
         }
 
-        public static float Sample(Grid g, float x, float y)
-        {
-            x = Math.Max(0, Math.Min(g.W - 1.001f, x)); y = Math.Max(0, Math.Min(g.H - 1.001f, y));
-            int ix = (int)x, iy = (int)y; float fx = x - ix, fy = y - iy;
-            return Lerp(Lerp(g[ix, iy], g[ix + 1, iy], fx), Lerp(g[ix, iy + 1], g[ix + 1, iy + 1], fx), fy);
-        }
+        public static float Sample(Grid g, float x, float y) { return g.At(x, y); }
 
         public static List<float[]> Chaikin(List<float[]> p)
         {

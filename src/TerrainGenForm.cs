@@ -9,45 +9,34 @@ using Timer = System.Windows.Forms.Timer;
 namespace CawPlus
 {
     /// <summary>
-    /// Generate Terrain: random heightmap (seeded, with sliders) and a planned road layout, previewed as a map, then
-    /// applied to the open world (heights via CAW's own height import; roads via CAW's undoable road commands).
+    /// Generate Terrain: random heightmap (seeded, with sliders) previewed as a map, then applied to the open world
+    /// through CAW's own height import.
     /// </summary>
     public sealed class TerrainGenForm : Form
     {
-        private NumericUpDown nudSeed, nudRoadSeed, nudRivers, nudBlocks, nudHoods, nudLots, nudEdge;
+        private NumericUpDown nudSeed, nudRivers;
         private ComboBox cbCoast, cbSize, cbLike;
         private bool applyingPreset;
         private int userCoast = -1; // coast picked by hand (Any EA world keeps it), -1 = from the EA worlds
         private TrackBar tbMountains, tbHills, tbRough, tbErosion, tbFlat, tbWater, tbHeight;
-        private TrackBar tbVariety, tbGrade;
-        private CheckBox chkRoads, chkDowntown, chkGrade, chkPaths, chkCawGrade, chkLotPads;
         private CheckBox chk3D;
         private Bitmap map2D;              // the 2D map shown (or draped over the heights in 3D)
         private Grid mapHeights; private float mapCell, mapSea;
         private MapView view;            // the preview: 2D map or the 3D view with its camera
-        private string terrainKey;         // the settings the shown terrain was made from: road-only changes reuse it
-        private float presetPathKm, presetClimb = 12; // the Like world's footpath length and road climbing cost
+        private string terrainKey;         // the settings the shown terrain was made from: unchanged settings reuse it
         private float[] presetCurve;                  // the Like world's measured height distribution (null = built-in)
         private bool presetLakes = true;              // the Like world has inland lakes
         private float presetCorner = -1;              // the Like world's sea direction (edge .. corner)
-        private float presetRoadKm, presetDeadEnds = 0.4f, presetBuild = 10; // road length (side streets fill up to it), dead ends, buildable slope
         private float presetRiverWidth = 1, presetPondRadius = 50;
         private string presetStyle = "";
-        private RoadCharacter presetCharacter;
         private int presetPonds;                      // raised ponds the Like world has
         private float presetSea = -1, presetLake = -1; // the Like world's sea and lake shares (%)
-        private string presetName = "";              // the world type the preset* targets came from
-        private TownShape presetTown;
-        private DowntownGrid presetGrid;
-        private RoadProfile presetProfile;
-        private RoadTargets presetTargets;            // the Like world's town, for the road checks
-        private LotTargets presetLots;                // the Like world's lots (count, sizes, gaps): the roads are built round them
+        private int presetHoods = 5;                  // the World type's neighbourhoods: terrain pockets (GenSettings.Pockets)
         private TerrainProfile presetTerrain;         // the Like world's terrain and water, for the terrain checks
         private const int TerrainTries = 8;           // variations of the seed tried (TerrainGen.GenerateChecked)
         private string checkedKey;                    // seed, Like world, coast and size the variation below was chosen for
         private int checkedSeed;
         private TerrainChecks.Result checkedResult;
-        private const int RoadTries = 12;            // layouts tried per plan (RoadPlanner.PlanChecked)
         private Button btnApply, btnUndo;
         private PictureBox picture;
         private ProgressBar progress;
@@ -59,7 +48,6 @@ namespace CawPlus
         private float openWorldSize;         // size of the world open in CAW, 0 if unknown
         private static readonly int[] Sizes = { 512, 1024, 2048 };
         private TerrainGen.Result preview;   // preview-resolution terrain + rivers
-        private RoadNet roads;
         // the preview is worked out on a background thread (the tester's v0.40 test: CAW froze ~10 s per change)
         private Work.Stop previewStop;
         private bool previewRunning, previewPending;
@@ -132,51 +120,6 @@ namespace CawPlus
             Controls.Add(gbT);
             y += 396;
 
-            GroupBox gbR = new GroupBox(); gbR.Text = "Roads"; gbR.SetBounds(x, y, colW, 170);
-            int ry = 18;
-            chkRoads = new CheckBox(); chkRoads.Text = "Plan a road layout"; chkRoads.Checked = false; // roads: their own tool now (Generate Roads) chkRoads.SetBounds(10, ry, 130, 20);
-            chkRoads.CheckedChanged += delegate { Schedule(); };
-            gbR.Controls.Add(chkRoads);
-            Label lrs = new Label(); lrs.Text = "Seed"; lrs.SetBounds(146, ry + 3, 32, 16); gbR.Controls.Add(lrs);
-            nudRoadSeed = Num(gbR, 180, ry, 0, 999999, 1);
-            Button bRand = new Button(); bRand.Text = "Randomise"; bRand.SetBounds(256, ry - 1, 94, 23);
-            bRand.Click += delegate { nudRoadSeed.Value = new Random().Next(1, 999999); };
-            gbR.Controls.Add(bRand);
-            ry += 28;
-            // the tester (v0.38 test): downtown size, neighbourhoods and community lots come from the Like world (EA's own
-            // layouts), not from the user, so they no longer limit the layout; Randomise gives another layout. The
-            // town is no longer pinned to the middle of the map either. These stay as hidden values for the planner.
-            chkDowntown = new CheckBox(); chkDowntown.Checked = true;
-            nudBlocks = new NumericUpDown(); nudBlocks.Minimum = 0; nudBlocks.Maximum = 8; nudBlocks.Value = 4;
-            nudHoods = new NumericUpDown(); nudHoods.Minimum = 0; nudHoods.Maximum = 8; nudHoods.Value = 5;
-            nudLots = new NumericUpDown(); nudLots.Minimum = 0; nudLots.Maximum = 8; nudLots.Value = 4;
-            Label le = new Label(); le.Text = "Roads out of world"; le.SetBounds(10, ry + 3, 108, 16); gbR.Controls.Add(le);
-            nudEdge = Num(gbR, 120, ry, 0, 3, 2); nudEdge.Width = 50;
-            new ToolTip().SetToolTip(nudEdge, "Roads that leave the map (for looks: they run under the distant terrain).");
-            chkPaths = new CheckBox(); chkPaths.Text = "Footpaths"; chkPaths.Checked = true; chkPaths.SetBounds(196, ry, 120, 20);
-            chkPaths.CheckedChanged += delegate { Schedule(); };
-            // footpaths are laid by their own tool after Build roads (Roads and Trees toolbar); chkPaths stays off-screen
-            ry += 26;
-            tbVariety = Slider(gbR, "Neighbourhood variety", 60, ref ry);
-            tbGrade = Slider(gbR, "Max steepness", 40, ref ry);
-            chkGrade = new CheckBox(); chkGrade.Text = "Smooth ground under roads"; chkGrade.Checked = true; chkGrade.SetBounds(10, ry, 220, 20);
-            new ToolTip().SetToolTip(chkGrade, "On Apply terrain: levels a narrow strip along each planned road so CAW can lay it.\n" +
-                "It only touches the road corridors, not the land around them.");
-            gbR.Controls.Add(chkGrade);
-            ry += 22;
-            chkCawGrade = new CheckBox(); chkCawGrade.Text = "Grade roads after building (CAW's grading tool)"; chkCawGrade.Checked = true; chkCawGrade.SetBounds(10, ry, colW - 20, 20);
-            new ToolTip().SetToolTip(chkCawGrade, "After Build roads: runs CAW's Road Grading tool over every road piece (Flatten slope, road edge 3,\n" +
-                "adjacent terrain sculpting Smooth, 3 passes), so roads sit smoothly on the land instead of bumping over it.\n" +
-                "It is its own undo step.");
-            gbR.Controls.Add(chkCawGrade);
-            ry += 22;
-            chkLotPads = new CheckBox(); chkLotPads.Text = "Level lot pads (terraces)"; chkLotPads.Checked = true; chkLotPads.SetBounds(10, ry, 220, 20);
-            new ToolTip().SetToolTip(chkLotPads, "On Apply terrain: levels the ground under each planned lot to the height of its road,\n" +
-                "blended 8 m round it, so lots on a hillside step up in terraces as in EA's worlds.");
-            gbR.Controls.Add(chkLotPads);
-            gbR.Height += 44;
-            // the tester (2026-10-24): roads are their own step after the terrain (Generate Roads, Roads and Trees toolbar), so
-            // the road box isn't shown here; its hidden values still carry the World type's settings for the terrain pockets
             y += 6;
 
             // one step at a time (the tester, 2026-10-24): terrain, then roads, then lots, each its own button and undo step
@@ -269,7 +212,6 @@ namespace CawPlus
             WorldPreset w = WorldPreset.Inspired(presets, (int)nudSeed.Value, userCoast, out label);
             if (w == null) return;
             ApplyPreset(w);
-            WorldPreset.Inspiration = WorldPreset.Short(w.Name);
             Status(label + " Each new seed picks one EA world and uses only that world's settings; choose a world under World type to keep to it.");
         }
 
@@ -280,20 +222,12 @@ namespace CawPlus
             applyingPreset = true;
             try
             {
-                cbCoast.SelectedIndex = (int)w.Coast;
+                cbCoast.SelectedIndex = Math.Max(0, Math.Min(cbCoast.Items.Count - 1, (int)w.Coast));
                 Set(tbMountains, w.Mountains); Set(tbHills, w.Hills); Set(tbRough, w.Roughness); Set(tbErosion, w.Erosion);
                 Set(tbFlat, w.FlatLand); Set(tbWater, w.Water); Set(tbHeight, (w.MaxHeight - 30) / 6.7f);
                 nudRivers.Value = Math.Max(nudRivers.Minimum, Math.Min(nudRivers.Maximum, w.Rivers));
-                chkDowntown.Checked = w.DowntownBlocks > 0;
-                if (w.DowntownBlocks > 0) nudBlocks.Value = Math.Max(nudBlocks.Minimum, Math.Min(nudBlocks.Maximum, w.DowntownBlocks));
-                nudHoods.Value = Math.Max(nudHoods.Minimum, Math.Min(nudHoods.Maximum, w.Neighbourhoods));
-                nudLots.Value = Math.Max(nudLots.Minimum, Math.Min(nudLots.Maximum, w.Lots));
-                nudEdge.Value = Math.Max(nudEdge.Minimum, Math.Min(nudEdge.Maximum, w.EdgeRoads));
-                Set(tbVariety, w.Variety);
-                Set(tbGrade, w.Steepness);
-                // worlds with (almost) no footpaths: Barnacle Bay, Hidden Springs, Sunlit Tides, Lucky Palms...
-                chkPaths.Checked = w.FootpathKm < 0 || w.FootpathKm >= 0.5f;
-                presetPathKm = Math.Max(0, w.FootpathKm); presetClimb = w.ClimbCost; presetCurve = w.HeightCurve; presetLakes = w.InlandLakes; presetCorner = w.CoastCorner; presetRoadKm = w.RoadKm; presetDeadEnds = w.DeadEndShare; presetBuild = w.BuildSlope; presetRiverWidth = w.RiverWidth; presetPonds = w.Ponds; presetPondRadius = w.PondRadius; presetSea = w.SeaShare; presetLake = w.LakeShare; presetTargets = w.RoadTargets; presetTown = w.Town; presetGrid = w.Grid; presetProfile = w.Profile; presetTerrain = w.Terrain; presetLots = w.LotFigures; presetStyle = w.Style; presetCharacter = w.Character; presetName = w.Name;
+                presetHoods = Math.Max(0, Math.Min(8, w.Neighbourhoods));
+                presetCurve = w.HeightCurve; presetLakes = w.InlandLakes; presetCorner = w.CoastCorner; presetRiverWidth = w.RiverWidth; presetPonds = w.Ponds; presetPondRadius = w.PondRadius; presetSea = w.SeaShare; presetLake = w.LakeShare; presetTerrain = w.Terrain; presetStyle = w.Style;
             }
             finally { applyingPreset = false; }
             Log.Info("Generate Terrain: preset '" + w.Name + "' (" + w.Source + ")" + (w.Note != null && w.Note.StartsWith("Inspired") ? ": " + w.Note : ""));
@@ -349,7 +283,7 @@ namespace CawPlus
             {
                 int pct = bgPct;
                 if (pct >= 0) { progress.Value = Math.Max(0, Math.Min(100, pct)); status.Text = bgStage + "..."; }
-                Application.DoEvents();
+                Injector.Pump();
             }
             bgPct = -1;
             if (error != null) throw new InvalidOperationException(error.Message, error);
@@ -365,31 +299,13 @@ namespace CawPlus
         {
             GenSettings s = new GenSettings();
             s.Seed = (int)nudSeed.Value;
-            s.Mountains = tbMountains.Value; s.Hills = tbHills.Value; s.Roughness = tbRough.Value; s.Erosion = tbErosion.Value; s.CentralTown = true; s.Pockets = (int)nudHoods.Value; // town site where the land suits it
+            s.Mountains = tbMountains.Value; s.Hills = tbHills.Value; s.Roughness = tbRough.Value; s.Erosion = tbErosion.Value; s.Pockets = presetHoods; // town site where the land suits it
             s.FlatLand = tbFlat.Value; s.Water = tbWater.Value; s.Rivers = (int)nudRivers.Value;
             s.MaxHeight = 30 + tbHeight.Value * 6.7f; // 30..700 m (EA's Lunar Lakes reaches 684 m; Sunset Valley 386 m)
             s.SeaLevel = seaLevel;
             s.Coast = (CoastType)cbCoast.SelectedIndex;
             s.HeightCurve = presetCurve; s.InlandLakes = presetLakes; s.CoastCorner = presetCorner; s.RiverWidth = presetRiverWidth; s.Ponds = presetPonds; s.PondRadius = presetPondRadius; s.SeaShare = presetSea; s.LakeShare = presetLake; s.SetStyle(presetStyle);
             return s;
-        }
-
-
-        private RoadSettings RoadsCfg()
-        {
-            RoadSettings r = new RoadSettings();
-            r.Targets = presetTargets; r.Town = presetTown; r.Grid = presetGrid; r.Profile = presetProfile;
-            r.Lots = presetLots; r.LotsLand = presetTerrain; r.LotsWorldM = presetTargets != null ? presetTargets.WorldM : 0;
-            r.Seed = (int)nudRoadSeed.Value;
-            r.Downtown = chkDowntown.Checked; r.DowntownBlocks = (int)nudBlocks.Value;
-            r.Neighbourhoods = (int)nudHoods.Value; r.CommunityLots = (int)nudLots.Value; r.EdgeRoads = (int)nudEdge.Value;
-            r.Variety = tbVariety.Value;
-            r.MaxGrade = 4 + tbGrade.Value * 0.16f; // 4..20 % (EA worlds: 90th-percentile road grade 3-27 %, median ~16 %)
-            r.SeaLevel = seaLevel; r.CentralTown = false; r.Footpaths = false; // planner finds the town on its flat land
-            r.FootpathKm = presetPathKm; r.ClimbCost = presetClimb; r.TargetKm = presetRoadKm; r.DeadEndShare = presetDeadEnds; r.BuildSlope = presetBuild; // from the Like world (tools/Fidelity)
-            r.Character = presetCharacter; r.WorldType = presetName;
-            if ((CoastType)cbCoast.SelectedIndex == CoastType.Volcano) r.Ring = new[] { 0.5f, 0.5f, 0.30f }; // a road round the atoll
-            return r;
         }
 
         // ---------------- preview ----------------
@@ -404,14 +320,13 @@ namespace CawPlus
                 if (previewStop != null) previewStop.Requested = true;
                 return;
             }
-            GenSettings g; CheckJob job; RoadSettings rs; string ckey; int cseed; TerrainChecks.Result cres; string tkey; TerrainGen.Result reuse;
+            GenSettings g; CheckJob job; string ckey; int cseed; TerrainChecks.Result cres; string tkey; TerrainGen.Result reuse;
             try
             {
                 g = Gen(); job = Job(g, worldSize);
-                // only road settings changed: keep the terrain, plan the roads again (the tester: roads after terrain, faster)
+                // nothing the terrain is made from changed (TerrainKey): keep the terrain shown
                 tkey = TerrainKey(g, worldSize, job);
                 reuse = tkey == terrainKey ? preview : null;
-                rs = chkRoads.Checked ? RoadsCfg() : null;
                 ckey = checkedKey; cseed = checkedSeed; cres = checkedResult;
             }
             catch (Exception ex) { Log.Error("Terrain preview failed", ex); return; }
@@ -422,30 +337,21 @@ namespace CawPlus
             Status("Working out the map...");
             Thread t = new Thread(delegate ()
             {
-                TerrainGen.Result res = null; RoadNet net = null; Bitmap bmp = null;
-                TerrainChecks.Result tchecks = null; RoadChecks.Result checks = null; Exception error = null;
+                TerrainGen.Result res = null; Bitmap bmp = null;
+                TerrainChecks.Result tchecks = null; Exception error = null;
                 try
                 {
                     if (reuse != null) { res = reuse; tchecks = cres; }
                     else if (job.Key == ckey) { g.Seed = cseed; tchecks = cres; TerrainChecks.Result none; res = Helper.Generate(g, 384, ws, false, null, null, 0, 0, stop, out none); }
                     else res = Helper.Generate(g, 384, ws, false, null, job.Target, job.Water, TerrainTries, stop, out tchecks);
-                    // the terrain first, then the roads worked out over it
-                    if (res != null && rs != null && reuse == null && !stop.Requested)
-                    {
-                        Bitmap first = Render(res.Heights, res.Cell, g.SeaLevel, null, 512, res.Ponds);
-                        TerrainGen.Result shown = res;
-                        try { BeginInvoke(new MethodInvoker(delegate { ShowTerrainFirst(stop, shown, first); })); }
-                        catch (Exception) { first.Dispose(); }
-                    }
-                    if (res != null && rs != null && !stop.Requested) net = Helper.PlanRoads(res.Coarse, rs, RoadTries, stop, out checks);
-                    if (res != null && !stop.Requested) bmp = Render(res.Heights, res.Cell, g.SeaLevel, net, 512, res.Ponds);
+                    if (res != null && !stop.Requested) bmp = Render(res.Heights, res.Cell, g.SeaLevel, null, 512, res.Ponds);
                 }
                 catch (Exception ex) { error = ex; }
                 try
                 {
                     BeginInvoke(new MethodInvoker(delegate
                     {
-                        PreviewDone(stop, job, g, res, net, bmp, tchecks, checks, error, ws, tkey);
+                        PreviewDone(stop, job, g, res, bmp, tchecks, error, ws, tkey);
                     }));
                 }
                 catch (Exception) { if (bmp != null) bmp.Dispose(); } // the window was closed
@@ -454,7 +360,6 @@ namespace CawPlus
             t.Start();
         }
 
-        /// <summary>Shows a finished preview (on the UI thread), or starts the newer one that was asked for meanwhile.</summary>
         /// <summary>Shows a map (2D, or in 3D over its heights); the form keeps the 2D bitmap for the 3D view.</summary>
         private void ShowMap(Bitmap bmp, Grid h, float cell, float sea)
         {
@@ -470,7 +375,7 @@ namespace CawPlus
             try
             {
                 if (preview == null || preview.Heights == null) return;
-                ShowMap(Render(preview.Heights, preview.Cell, mapSea, roads, 512, preview.Ponds), preview.Heights, preview.Cell, mapSea);
+                ShowMap(Render(preview.Heights, preview.Cell, mapSea, null, 512, preview.Ponds), preview.Heights, preview.Cell, mapSea);
             }
             catch (Exception ex) { Log.Error("Recolouring the preview failed", ex); }
         }
@@ -479,14 +384,6 @@ namespace CawPlus
         {
             if (map2D == null) return;
             view.SetMap(map2D, mapHeights, mapCell, mapSea, null);
-        }
-
-        /// <summary>The new terrain on its own while the roads are still being planned over it.</summary>
-        private void ShowTerrainFirst(Work.Stop stop, TerrainGen.Result res, Bitmap bmp)
-        {
-            if (stop.Requested || previewPending) { bmp.Dispose(); return; }
-            ShowMap(bmp, res.Heights, res.Cell, seaLevel);
-            Status("Terrain ready; planning the roads...");
         }
 
         /// <summary>Everything the terrain is made from (GenSettings' fields, world size, the checks' target), as a key.</summary>
@@ -504,8 +401,9 @@ namespace CawPlus
             return b.Append(ws).Append('|').Append(job.Key).Append('|').Append(job.Water).ToString();
         }
 
-        private void PreviewDone(Work.Stop stop, CheckJob job, GenSettings g, TerrainGen.Result res, RoadNet net, Bitmap bmp,
-                                 TerrainChecks.Result tchecks, RoadChecks.Result checks, Exception error, float ws, string tkey)
+        /// <summary>Shows a finished preview (on the UI thread), or starts the newer one that was asked for meanwhile.</summary>
+        private void PreviewDone(Work.Stop stop, CheckJob job, GenSettings g, TerrainGen.Result res, Bitmap bmp,
+                                 TerrainChecks.Result tchecks, Exception error, float ws, string tkey)
         {
             previewRunning = false;
             UseWaitCursor = busy;
@@ -521,20 +419,14 @@ namespace CawPlus
             try
             {
                 if (tchecks != null) { checkedKey = job.Key; checkedSeed = g.Seed; checkedResult = tchecks; }
-                preview = res; roads = net; terrainKey = tkey;
+                preview = res; terrainKey = tkey;
                 ShowMap(bmp, res.Heights, res.Cell, g.SeaLevel);
                 float lo, hi; res.Heights.MinMax(out lo, out hi);
                 int water = 0; foreach (float v in res.Heights.D) if (v < g.SeaLevel) water++;
                 info.Text = string.Format("Heights {0:F0}-{1:F0} m, sea level {2:F0} m, {3:F0}% water, {4} river(s).", lo, hi, g.SeaLevel,
                                 100f * water / res.Heights.D.Length, res.Rivers.Count)
                           + string.Format(" World {0:F0} m.", ws)
-                          + (net != null ? string.Format("\nRoads: {0:F1} km in {1} pieces, {2} junctions. Black = main roads, white = streets, light = lanes." +
-                                "\nNeighbourhoods ({5} of {6} fit the land): {3}. Bridges (tan): {7}." +
-                                " Footpaths: use the Footpaths button (Roads and Trees) after Build roads.",
-                                net.TotalKm, net.Roads.Count, net.Junctions.Count, HoodList(net), SiteList(net), net.Hoods.Count, net.HoodsAsked, net.Bridges.Count)
-                                + (net.LotsWanted > 0 ? string.Format("\nLots: {0} of {1} placed along the roads ({2} community, dark).", net.Lots.Count, net.LotsWanted, CountCommunity(net)) : "") : "")
-                          + (tchecks != null ? "\n" + tchecks.ToString() + " against the world type's land and water." : "")
-                          + (checks != null ? "\n" + checks.ToString() + " against the world type's town." : "");
+                          + (tchecks != null ? "\n" + tchecks.ToString() + " against the world type's land and water." : "");
                 Status("Map ready. 'Apply terrain' replaces the open world's heights (backed up first).");
             }
             catch (Exception ex) { Log.Error("Terrain preview failed", ex); Status("Preview failed: " + ex.Message); }
@@ -722,71 +614,51 @@ namespace CawPlus
             }
             bmp.UnlockBits(bd);
             if (net != null)
-            {
-                float worldSize = (h.W - 1) * cell, s = size / worldSize;
                 using (Graphics gr = Graphics.FromImage(bmp))
                 {
                     gr.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-                    // lots first, under the roads: residential light, community darker
-                    using (Brush res = new SolidBrush(Color.FromArgb(200, 236, 214, 160)), com = new SolidBrush(Color.FromArgb(210, 196, 120, 70)))
-                    using (Pen edge = new Pen(Color.FromArgb(150, 90, 70, 40), 1f))
-                        foreach (PlannedLot l in net.Lots)
-                        {
-                            float[][] c = LotPlanner.Corners(l.X, l.Z, l.Ux, l.Uz, l.Width, l.Depth);
-                            PointF[] q = new PointF[4];
-                            for (int i = 0; i < 4; i++) q[i] = new PointF(c[i][0] * s, c[i][1] * s);
-                            gr.FillPolygon(l.Community ? com : res, q);
-                            gr.DrawPolygon(edge, q);
-                        }
-                    Pen[] pens = { new Pen(Color.FromArgb(30, 30, 30), 3.5f), new Pen(Color.FromArgb(240, 240, 230), 2.2f), new Pen(Color.FromArgb(200, 196, 170), 1.5f) };
-                    foreach (Road r in net.Roads)
-                    {
-                        if (r.Points.Count < 2) continue;
-                        PointF[] pts = new PointF[r.Points.Count];
-                        for (int i = 0; i < pts.Length; i++) pts[i] = new PointF(r.Points[i][0] * s, r.Points[i][1] * s);
-                        gr.DrawLines(pens[(int)r.Kind], pts);
-                    }
-                    foreach (Pen p in pens) p.Dispose();
-                    using (Pen path = new Pen(Color.FromArgb(214, 140, 60), 1.4f))
-                        foreach (FootPath fp in net.Paths)
-                        {
-                            if (fp.Points.Count < 2) continue;
-                            PointF[] pts = new PointF[fp.Points.Count + (fp.Closed ? 1 : 0)];
-                            for (int i = 0; i < pts.Length; i++) { float[] q = fp.Points[i % fp.Points.Count]; pts[i] = new PointF(q[0] * s, q[1] * s); }
-                            gr.DrawLines(path, pts);
-                        }
-                    using (Pen deck = new Pen(Color.FromArgb(150, 90, 30), 4.5f), top = new Pen(Color.FromArgb(235, 180, 100), 2f))
-                        foreach (float[] b in net.Bridges)
-                        {
-                            gr.DrawLine(deck, b[0] * s, b[1] * s, b[2] * s, b[3] * s);
-                            gr.DrawLine(top, b[0] * s, b[1] * s, b[2] * s, b[3] * s);
-                        }
+                    DrawNet(gr, net, size / ((h.W - 1) * cell));
                 }
-            }
             return bmp;
         }
 
-        private static int CountCommunity(RoadNet net)
+        /// <summary>A road plan drawn over a map picture: lots, roads, footpaths and bridges ('s' pixels per metre).</summary>
+        internal static void DrawNet(Graphics gr, RoadNet net, float s)
         {
-            int k = 0; foreach (PlannedLot l in net.Lots) if (l.Community) k++;
-            return k;
-        }
-
-        private static string HoodList(RoadNet net)
-        {
-            if (net.Hoods.Count == 0) return "none";
-            string[] names = new string[net.Hoods.Count];
-            for (int i = 0; i < names.Length; i++)
-                names[i] = net.Hoods[i] == HoodStyle.Loop ? "loop" : net.Hoods[i] == HoodStyle.Grid ? "small grid" : net.Hoods[i] == HoodStyle.CulDeSac ? "cul-de-sacs" : "farm lane";
-            return string.Join(", ", names);
-        }
-
-        private static string SiteList(RoadNet net)
-        {
-            if (net.Sites.Count == 0) return "none";
-            string[] names = new string[net.Sites.Count];
-            for (int i = 0; i < names.Length; i++) names[i] = net.Sites[i].Label;
-            return string.Join(", ", names);
+            // lots first, under the roads: residential light, community darker
+            using (Brush res = new SolidBrush(Color.FromArgb(200, 236, 214, 160)), com = new SolidBrush(Color.FromArgb(210, 196, 120, 70)))
+            using (Pen edge = new Pen(Color.FromArgb(150, 90, 70, 40), 1f))
+                foreach (PlannedLot l in net.Lots)
+                {
+                    float[][] c = LotPlanner.Corners(l.X, l.Z, l.Ux, l.Uz, l.Width, l.Depth);
+                    PointF[] q = new PointF[4];
+                    for (int i = 0; i < 4; i++) q[i] = new PointF(c[i][0] * s, c[i][1] * s);
+                    gr.FillPolygon(l.Community ? com : res, q);
+                    gr.DrawPolygon(edge, q);
+                }
+            Pen[] pens = { new Pen(Color.FromArgb(30, 30, 30), 3.5f), new Pen(Color.FromArgb(240, 240, 230), 2.2f), new Pen(Color.FromArgb(200, 196, 170), 1.5f) };
+            foreach (Road r in net.Roads)
+            {
+                if (r.Points.Count < 2) continue;
+                PointF[] pts = new PointF[r.Points.Count];
+                for (int i = 0; i < pts.Length; i++) pts[i] = new PointF(r.Points[i][0] * s, r.Points[i][1] * s);
+                gr.DrawLines(pens[(int)r.Kind], pts);
+            }
+            foreach (Pen p in pens) p.Dispose();
+            using (Pen path = new Pen(Color.FromArgb(214, 140, 60), 1.4f))
+                foreach (FootPath fp in net.Paths)
+                {
+                    if (fp.Points.Count < 2) continue;
+                    PointF[] pts = new PointF[fp.Points.Count + (fp.Closed ? 1 : 0)];
+                    for (int i = 0; i < pts.Length; i++) { float[] q = fp.Points[i % fp.Points.Count]; pts[i] = new PointF(q[0] * s, q[1] * s); }
+                    gr.DrawLines(path, pts);
+                }
+            using (Pen deck = new Pen(Color.FromArgb(150, 90, 30), 4.5f), top = new Pen(Color.FromArgb(235, 180, 100), 2f))
+                foreach (float[] b in net.Bridges)
+                {
+                    gr.DrawLine(deck, b[0] * s, b[1] * s, b[2] * s, b[3] * s);
+                    gr.DrawLine(top, b[0] * s, b[1] * s, b[2] * s, b[3] * s);
+                }
         }
 
         // ---------------- world size ----------------
@@ -837,6 +709,7 @@ namespace CawPlus
             int scale = Math.Max(100, (int)Math.Ceiling(g.MaxHeight / 100f) * 100);
             using (SaveFileDialog d = new SaveFileDialog())
             {
+                d.RestoreDirectory = true; // the process-wide current folder stays where it was
                 d.Title = "Save heightmap for New World";
                 d.Filter = "PNG heightmap|*.png";
                 d.FileName = string.Format("CAWPlus_{0}_seed{1}.png", img, g.Seed);
@@ -848,20 +721,9 @@ namespace CawPlus
                 try
                 {
                     CheckJob job = Job(g, img);
-                    RoadSettings rs = chkRoads.Checked && chkGrade.Checked ? RoadsCfg() : null;
-                    bool pads = chkLotPads.Checked;
                     TerrainGen.Result full = (TerrainGen.Result)RunInBackground(delegate ()
                     {
                         TerrainChecks.Result tc; TerrainGen.Result f = GenChecked(g, img, img, true, BgProgress, job, out tc);
-                        if (rs != null)
-                        {
-                            BgProgress("Smoothing ground under roads", 85);
-                            RoadChecks.Result rc; RoadNet net = Helper.PlanRoads(f.Coarse, rs, RoadTries, null, out rc);
-                            List<List<float[]>> lines = new List<List<float[]>>();
-                            foreach (Road r in net.Roads) lines.Add(r.Points);
-                            TerrainGen.GradeRoads(f.Heights, f.Cell, lines, g.SeaLevel);
-                            if (pads) LotPlanner.LevelPads(f.Heights, f.Cell, net.Lots, g.SeaLevel);
-                        }
                         return f;
                     });
                     Grid grey = new Grid(img, img);
@@ -870,7 +732,7 @@ namespace CawPlus
                     Log.Info("Saved heightmap for New World: " + d.FileName + " (" + img + " px, height scale " + scale + " m)");
                     SetBusy(false);
                     Status(string.Format("Saved {0}. In CAW: File > New World, choose this image and Height scale {1} (type it in if it isn't listed). Then open " +
-                        "Generate Terrain in the new world (same seeds) and click Apply terrain to set exact heights, sea level and roads.",
+                        "Generate Terrain in the new world (same seeds) and click Apply terrain to set exact heights and the sea level.",
                         Path.GetFileName(d.FileName), scale));
                 }
                 catch (Exception ex) { Log.Error("Saving heightmap failed", ex); SetBusy(false); Status("Saving failed: " + ex.Message); }
@@ -900,7 +762,7 @@ namespace CawPlus
                 cbSize.SelectedIndex = 0;
             }
             if (MessageBox.Show(this, "Replace the open world's terrain with this map?\n\nThe current heights are backed up first; " +
-                    "'Undo terrain' puts them back. Lots and objects are not moved, so this is best on a new or empty world.",
+                    "'Undo terrain' puts them back. Existing ponds are removed. Lots and objects are not moved, so this is best on a new or empty world.",
                     "Generate Terrain", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
             if (previewStop != null) previewStop.Requested = true; // CPU for the full map, not a preview
             SetBusy(true);
@@ -922,28 +784,13 @@ namespace CawPlus
 
                 GenSettings g = Gen();
                 CheckJob job = Job(g, worldSize);
-                RoadSettings rs = chkRoads.Checked ? RoadsCfg() : null;
-                bool grade = chkGrade.Checked, pads = chkLotPads.Checked;
                 float ws = worldSize;
                 // the computation runs on a worker thread so CAW stays responsive; CAW calls stay on this thread
-                TerrainChecks.Result tc = null; RoadNet net = null;
+                TerrainChecks.Result tc = null;
                 DateTime t0 = DateTime.Now;
                 TerrainGen.Result full = (TerrainGen.Result)RunInBackground(delegate ()
                 {
                     TerrainGen.Result f = GenChecked(g, W, ws, true, BgProgress, job, out tc);
-                    if (rs != null) { BgProgress("Planning roads", 82); RoadChecks.Result rc; net = Helper.PlanRoads(f.Coarse, rs, RoadTries, null, out rc); }
-                    if (net != null && grade)
-                    {
-                        BgProgress("Smoothing ground under roads", 85);
-                        List<List<float[]>> lines = new List<List<float[]>>();
-                        foreach (Road r in net.Roads) lines.Add(r.Points);
-                        TerrainGen.GradeRoads(f.Heights, f.Cell, lines, g.SeaLevel);
-                    }
-                    if (net != null && pads && net.Lots.Count > 0)
-                    {
-                        BgProgress("Levelling lot pads", 87);
-                        LotPlanner.LevelPads(f.Heights, f.Cell, net.Lots, g.SeaLevel);
-                    }
                     return f;
                 });
                 Log.Info(string.Format("Generate Terrain: map worked out in {0:F1} s{1}", (DateTime.Now - t0).TotalSeconds,
@@ -952,6 +799,9 @@ namespace CawPlus
                 // CAW's 16-bit import maps grey to height linearly; measure that mapping instead of assuming it.
                 OnProgress("Calibrating CAW's height import", 88);
                 imported = true; // from here on the world's heights are being replaced
+                // ponds made for the old land would flood the new land up to their level
+                try { int gone = Caw.RemoveAllPonds(world); if (gone > 0) Log.Info("Removed " + gone + " pond(s) left from the old land"); madePonds.Clear(); }
+                catch (Exception ex) { Log.Error("Removing old ponds failed", ex); }
                 float err = HeightImport.Apply(world, ti, full.Heights, W, H, OnProgress, out clipNote);
                 // ponds above the sea (as the Like world has): CAW's own ponds, flooding each dug hollow to its level
                 MakePonds(world, ti, full, W);
@@ -967,8 +817,7 @@ namespace CawPlus
                 try { Log.Info("Sea level refreshed at " + ti.WaterLevel.ToString("F2") + " m: " + Caw.RefreshSea(world, ti.WaterLevel)); }
                 catch (Exception ex) { Log.Error("Refreshing the sea level failed", ex); }
                 preview = TerrainGen.Generate(g, 384, worldSize, false, null);
-                roads = net;
-                ShowMap(Render(full.Heights, full.Cell, g.SeaLevel, net, 512, full.Ponds), full.Heights, full.Cell, g.SeaLevel);
+                ShowMap(Render(full.Heights, full.Cell, g.SeaLevel, null, 512, full.Ponds), full.Heights, full.Cell, g.SeaLevel);
                 SetBusy(false);
                 Injector.Done("terrain");
                 Status(string.Format("Terrain applied (mean height error {0:F2} m). {1}Backup: {2}{3}", err,
@@ -979,7 +828,8 @@ namespace CawPlus
                 Log.Error("Applying terrain failed", ex);
                 // don't leave the calibration ramp or a half-done import in the world: put the backup back
                 bool back = false;
-                if (imported && backup != null && File.Exists(backup))
+                // (not if another world was opened meanwhile: the backup belongs to the first one)
+                if (imported && backup != null && File.Exists(backup) && !(ex is WorldChangedException))
                     try { back = Caw.ImportHeightImage(world, backup); } catch (Exception ex2) { Log.Error("Restoring the heights failed", ex2); }
                 SetBusy(false);
                 Status("Applying terrain failed: " + ex.Message + (!imported ? "" : back ? " The previous heights were put back." :
@@ -998,9 +848,11 @@ namespace CawPlus
                 {
                     float wx, wz;
                     TerrainSampler.Map(ti.Orientation, q[0] / ti.WorldSize, q[1] / ti.WorldSize, out wx, out wz);
-                    object p = Caw.CreatePond(world, wx * ti.WorldSize, wz * ti.WorldSize, q[3], ti.WorldSize / (W - 1));
+                    float span, maxSpan = Math.Max(100f, 8 * q[2]);
+                    object p = Caw.CreatePondChecked(world, wx * ti.WorldSize, wz * ti.WorldSize, q[3], ti.WorldSize / (W - 1), maxSpan, out span);
                     if (p != null) { madePonds.Add(p); made++; }
-                    Log.Info(string.Format("Pond at ({0:F0}, {1:F0}) m, radius {2:F0} m, level {3:F1} m: {4}", wx * ti.WorldSize, wz * ti.WorldSize, q[2], q[3], p != null ? "made" : "CAW refused"));
+                    Log.Info(string.Format("Pond at ({0:F0}, {1:F0}) m, radius {2:F0} m, level {3:F1} m: {4}, water {5:F0} m across", wx * ti.WorldSize, wz * ti.WorldSize, q[2], q[3],
+                        p != null ? "made" : span > maxSpan ? "removed: it flooded more than " + maxSpan.ToString("F0") + " m" : "CAW refused", span));
                 }
                 catch (Exception ex) { Log.Error("Making a pond failed", ex); }
             }
@@ -1041,8 +893,6 @@ namespace CawPlus
             Status(ok ? "Heights restored from " + Path.GetFileName(latest) + "." : "CAW refused the backup image.");
         }
 
-        // ---------------- roads ----------------
-
         // ---------------- helpers ----------------
 
         private void OnProgress(string stage, int pct)
@@ -1050,7 +900,7 @@ namespace CawPlus
             progress.Value = Math.Max(0, Math.Min(100, pct));
             status.Text = stage + "...";
             status.Refresh(); progress.Refresh();
-            Application.DoEvents();
+            Injector.Pump();
         }
 
         private void Status(string s) { status.Text = s; }

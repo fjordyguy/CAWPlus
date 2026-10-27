@@ -16,9 +16,8 @@ namespace CawPlus
         public float[] LotDec = new float[10];   // metres from the core holding 10..100 % of the lots
         public float[] RoadDec = new float[10];  // metres from the core holding 10..100 % of the road length
         public float Country = 0.3f;             // share of road length with no lot within 70 m
-        public float WorldM = 2048;              // the world's size, metres
 
-        /// <summary>"l1..l10;r1..r10;country;worldM"; null if empty or malformed.</summary>
+        /// <summary>"l1..l10;r1..r10;country;worldM" (worldM ignored); null if empty or malformed.</summary>
         public static TownShape Parse(string v)
         {
             if (string.IsNullOrEmpty(v)) return null;
@@ -30,7 +29,6 @@ namespace CawPlus
             TownShape t = new TownShape();
             for (int i = 0; i < 10; i++) { t.LotDec[i] = float.Parse(a[i], ic); t.RoadDec[i] = float.Parse(b[i], ic); }
             t.Country = float.Parse(p[2], ic);
-            if (p.Length > 3) t.WorldM = float.Parse(p[3], ic);
             return t;
         }
 
@@ -52,7 +50,7 @@ namespace CawPlus
         /// <summary>A copy with every distance times 'k' (a town with more or fewer lots than the EA world spreads further or less).</summary>
         public TownShape Scaled(float k)
         {
-            TownShape t = new TownShape(); t.Country = Country; t.WorldM = WorldM;
+            TownShape t = new TownShape(); t.Country = Country;
             for (int i = 0; i < 10; i++) { t.LotDec[i] = LotDec[i] * k; t.RoadDec[i] = RoadDec[i] * k; }
             return t;
         }

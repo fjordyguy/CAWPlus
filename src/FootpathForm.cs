@@ -8,7 +8,7 @@ namespace CawPlus
 {
     /// <summary>
     /// The Footpaths window (Roads and Trees toolbar, after Build roads; the tester's v0.40 test): reads the roads already in
-    /// the world, plans footpaths round them the way the Like world has them (length, distance from the roads, trails
+    /// the world, plans footpaths round them the way the World type has them (length, distance from the roads, trails
     /// into the hills, promenades by the water; PathPlanner.PlanOnRoads), shows them, then builds them as CAW footpaths.
     /// </summary>
     public sealed class FootpathForm : Form
@@ -127,7 +127,7 @@ namespace CawPlus
                     }
                     roads.Add(line);
                 }
-                if (roads.Count == 0) { SetBusy(false); Status("No roads found: build the roads first (Generate Terrain > Build roads, or CAW's road tool)."); return; }
+                if (roads.Count == 0) { SetBusy(false); Status("No roads found: build the roads first (Generate Roads > Build roads, or CAW's road tool)."); return; }
                 float step = TerrainGen.CoarseCell / ti.CellMeters;
                 Grid soft = ti.Heights.Blur(step * 0.4f);
                 int cn = (int)(ti.WorldSize / TerrainGen.CoarseCell) + 1;
@@ -209,7 +209,6 @@ namespace CawPlus
         // ---------------- helpers ----------------
 
         private delegate object Task();
-        private volatile string bgStage = "Planning footpaths";
 
         /// <summary>Runs pure computation on a worker thread, keeping CAW responsive.</summary>
         private object RunInBackground(Task task)
@@ -221,8 +220,8 @@ namespace CawPlus
             int tick = 0;
             while (!t.Join(20))
             {
-                progress.Value = (tick++ * 2) % 100; status.Text = bgStage + "...";
-                Application.DoEvents();
+                progress.Value = (tick++ * 2) % 100; status.Text = "Planning footpaths...";
+                Injector.Pump();
             }
             if (error != null) throw new InvalidOperationException(error.Message, error);
             return result;
@@ -233,7 +232,7 @@ namespace CawPlus
             progress.Value = Math.Max(0, Math.Min(100, pct));
             status.Text = stage + "...";
             status.Refresh(); progress.Refresh();
-            Application.DoEvents();
+            Injector.Pump();
         }
 
         private void Status(string s) { status.Text = s; }

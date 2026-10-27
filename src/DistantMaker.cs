@@ -8,7 +8,7 @@ namespace CawPlus
     {
         public Grid Heights;            // metres, map pixel layout (TerrainInfo.Heights)
         public int Orientation;         // TerrainInfo.Orientation
-        public float Origin, WorldSize, Sea;
+        public float WorldSize, Sea;     // the ring is built round the map centre, in the object's own metres
         public int[] Albedo; public int AlbW, AlbH;   // optional ground colour (0xRRGGBB), map pixel layout, any resolution
         public Grid Trees;              // optional tree cover 0..1, map pixel layout, any resolution
     }
@@ -32,7 +32,7 @@ namespace CawPlus
         public Grid Field; public float FieldCell;   // heights over the whole square (world inside, ring outside), for previews
         public int[] Diffuse, Normal;   // 0xAARRGGBB, TexSize^2 and NormalSize^2, rows = +z
         public int TexSize, NormalSize;
-        public float CentreX, CentreZ, BaseY, R, Half;   // object position (world), ring half-size, map half-size
+        public float R, Half;   // ring half-size, map half-size (the object goes at the map centre, y 0)
         public string Summary = "";
         public string Water = "";       // what became of the water at the map edge
     }
@@ -55,8 +55,6 @@ namespace CawPlus
             DistantResult r = new DistantResult();
             float a = inp.WorldSize / 2f, R = a + s.Ring;
             r.Half = a; r.R = R;
-            r.CentreX = inp.Origin + a; r.CentreZ = inp.Origin + a;
-            r.BaseY = WorldH(inp, 0, 0);
             Report(progress, "Reading the world's edge", 2);
 
             // ---- statistics of the land ----
@@ -183,18 +181,8 @@ namespace CawPlus
 
         private static void ToMap(DistantInput inp, float lx, float lz, int w, int h, out float mx, out float my)
         {
-            float wx = (lx + inp.WorldSize / 2f) / inp.WorldSize, wz = (lz + inp.WorldSize / 2f) / inp.WorldSize, u, v;
-            switch (inp.Orientation)
-            {
-                case 1: u = 1 - wx; v = wz; break;
-                case 2: u = wx; v = 1 - wz; break;
-                case 3: u = 1 - wx; v = 1 - wz; break;
-                case 4: u = wz; v = wx; break;
-                case 5: u = wz; v = 1 - wx; break;
-                case 6: u = 1 - wz; v = wx; break;
-                case 7: u = 1 - wz; v = 1 - wx; break;
-                default: u = wx; v = wz; break;
-            }
+            float wx = (lx + inp.WorldSize / 2f) / inp.WorldSize, wz = (lz + inp.WorldSize / 2f) / inp.WorldSize;
+            float u, v; TerrainSampler.Unmap(inp.Orientation, wx, wz, out u, out v);
             mx = u * w; my = v * h;
         }
 
@@ -310,26 +298,26 @@ namespace CawPlus
                     carry++;
                     bool viaLake = rr.NextDouble() < 0.25;
                     float len = viaLake ? 300 + 400 * (float)rr.NextDouble() : float.MaxValue;
-                    Trace(inp, s, rr, cut, ex, ez, ang0, hw0, len, 0, slope, reach, a, R, f, out endX, out endZ, out endAng);
+                    Trace(inp, rr, cut, ex, ez, ang0, hw0, len, 0, slope, reach, a, R, f, out endX, out endZ, out endAng);
                     if (viaLake)
                     {
                         float lx, lz, rad;
                         Lake(inp, rr, cut, endX, endZ, endAng, hw0, slope, reach, a, R, f, out lx, out lz, out rad);
                         float ox = lx + 0.9f * rad * (float)Math.Cos(endAng), oz = lz + 0.9f * rad * (float)Math.Sin(endAng);
-                        Trace(inp, s, rr, cut, ox, oz, endAng, Math.Max(6f, hw0 * 0.7f), float.MaxValue, 0, slope, reach, a, R, f, out endX, out endZ, out endAng);
+                        Trace(inp, rr, cut, ox, oz, endAng, Math.Max(6f, hw0 * 0.7f), float.MaxValue, 0, slope, reach, a, R, f, out endX, out endZ, out endAng);
                     }
                 }
                 else if (kind == 1)
                 {
                     lakes++;
-                    Trace(inp, s, rr, cut, ex, ez, ang0, hw0, 250 + 500 * (float)rr.NextDouble(), 1, slope, reach, a, R, f, out endX, out endZ, out endAng);
+                    Trace(inp, rr, cut, ex, ez, ang0, hw0, 250 + 500 * (float)rr.NextDouble(), 1, slope, reach, a, R, f, out endX, out endZ, out endAng);
                     float lx, lz, rad;
                     Lake(inp, rr, cut, endX, endZ, endAng, hw0, slope, reach, a, R, f, out lx, out lz, out rad);
                 }
                 else
                 {
                     ends++;
-                    Trace(inp, s, rr, cut, ex, ez, ang0, hw0, 150 + 300 * (float)rr.NextDouble() + 2 * hw0, 2, slope, reach, a, R, f, out endX, out endZ, out endAng);
+                    Trace(inp, rr, cut, ex, ez, ang0, hw0, 150 + 300 * (float)rr.NextDouble() + 2 * hw0, 2, slope, reach, a, R, f, out endX, out endZ, out endAng);
                 }
             }
             // lower the land into the channels (a soft minimum, so valley floors meet the slopes without a crease)
@@ -359,7 +347,7 @@ namespace CawPlus
         /// towards it. kind 0 widens on to the horizon (or to 'len'), 1 widens a little to 'len' (into a lake),
         /// 2 narrows and its bed rises above the water, so it ends as a dry valley.
         /// </summary>
-        private static void Trace(DistantInput inp, DistantSettings s, Random rr, Grid cut, float x, float z, float ang0, float hw0, float len,
+        private static void Trace(DistantInput inp, Random rr, Grid cut, float x, float z, float ang0, float hw0, float len,
             int kind, float slope, float reach, float a, float R, float f, out float endX, out float endZ, out float endAng)
         {
             float g = 0.03f + 0.04f * (float)rr.NextDouble();
@@ -793,8 +781,9 @@ namespace CawPlus
         }
 
         /// <summary>
-        /// A picture for the preview: the colour map with hill shading (light from the north-west) and the water
-        /// (sea and anything below it) in blue, deeper darker.
+        /// A picture for the preview in the colours it will have in the game: the colour texture it is made with (colour
+        /// match included), lightly hill-shaded (light from the north-west), and the water (sea and anything below it) as
+        /// CAW's sea, deeper darker.
         /// </summary>
         public static int[] PreviewColours(DistantResult r, float sea)
         {
@@ -811,13 +800,16 @@ namespace CawPlus
                     if (h < sea)
                     {
                         float depth = Clamp01((sea - h) / 12f);
-                        cr = 70 - 40 * depth; cg = 120 - 45 * depth; cb = 160 - 30 * depth;
+                        // the game's own sea (the ring has no mesh there): CAW's dark teal water
+                        cr = 46 - 16 * depth; cg = 82 - 22 * depth; cb = 100 - 20 * depth;
                     }
                     else
                     {
                         float gx = (r.Field.At(fx + 1, fz) - r.Field.At(fx - 1, fz)) / (2 * f), gz = (r.Field.At(fx, fz + 1) - r.Field.At(fx, fz - 1)) / (2 * f);
                         float l = (float)Math.Sqrt(gx * gx + gz * gz + 1);
-                        float lit = Math.Max(0.45f, Math.Min(1.35f, 0.75f + 0.9f * ((gx + gz) * 0.7f + 0.5f) / l));
+                        // gentle shading round 1 (the texture's own colour on level ground), as the game lights it:
+                        // the preview used to brighten slopes facing the light by up to 35%
+                        float lit = Math.Max(0.7f, Math.Min(1.1f, 1f + 0.45f * (gx + gz) * 0.7f / l));
                         cr *= lit; cg *= lit; cb *= lit;
                     }
                     o[y * T + x] = unchecked((int)0xFF000000) | (Clamp255(cr) << 16) | (Clamp255(cg) << 8) | Clamp255(cb);
@@ -858,7 +850,7 @@ namespace CawPlus
         /// <summary>The object key everything is named after: one per world, so remaking replaces the same object.</summary>
         public static ulong Instance(string worldKey) { return S3Pkg.Fnv64("cawplus_distant_terrain_" + worldKey) & 0x00FFFFFFFFFFFFFFUL; }
 
-        public static byte[] Package(DistantResult r, string worldKey, string displayName, Template t)
+        public static byte[] Package(DistantResult r, string worldKey, Template t)
         {
             ulong inst = Instance(worldKey);
             string name = "CAWPlus_DistantTerrain_" + worldKey;

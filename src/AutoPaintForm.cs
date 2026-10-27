@@ -507,21 +507,15 @@ namespace CawPlus
                 string err;
                 List<PaintRole> mapped = MappedRoles(layerOf, out err);
                 StyleProfile style = cbStyle.SelectedItem as StyleProfile;
-                // What EA's own worlds paint each kind of ground with (built-in styles from their .world files).
-                Dictionary<PaintRole, List<string>> ea = new Dictionary<PaintRole, List<string>>();
-                foreach (PaintRole r in PaintEngine.Roles) ea[r] = new List<string>();
-                foreach (StyleProfile p in StyleProfile.LoadAll())
-                    if (p.FromEA)
-                        foreach (KeyValuePair<PaintRole, RoleStyle> kv in p.Roles) ea[kv.Key].AddRange(kv.Value.Textures);
                 Dictionary<PaintRole, Grid> masks;
                 string matchNote = null;
                 if (style != null)
                 {
                     List<PaintRole> roles = mapped != null && mapped.Count > 0 ? mapped : new List<PaintRole>(PaintEngine.Roles);
-                    string key = style.Name + "|" + s.Seed + "|" + s.WaterLevel + "|" + string.Join(",", Array.ConvertAll(roles.ToArray(), delegate (PaintRole r) { return r.ToString(); }));
+                    string key = style.Name + "|" + s.Seed + "|" + s.Detail + "|" + s.WaterLevel + "|" + string.Join(",", Array.ConvertAll(roles.ToArray(), delegate (PaintRole r) { return r.ToString(); }));
                     if (previewGen == null || previewGenKey != key)
                     {
-                        previewGen = new StyledGenerator(style, previewHeights, previewCell, s.WaterLevel, previewWaterOffset, s.Seed, roles);
+                        previewGen = new StyledGenerator(style, previewHeights, previewCell, s.WaterLevel, previewWaterOffset, s.Seed, roles, s.Detail);
                         previewGenKey = key;
                     }
                     masks = previewGen.Fit(PaintJob.Amounts(s), s.Softness / 50f, StyledGenerator.MaxPasses, null);
@@ -716,7 +710,7 @@ namespace CawPlus
                     }
                     layerOf[r] = idx;
                     added.Add(idx);
-                    Application.DoEvents();
+                    Injector.Pump();
                 }
                 if (added.Count > 0)
                 {
@@ -750,7 +744,7 @@ namespace CawPlus
                                     try { idx = Caw.AddLayer(world, tp.Path, TextureLibrary.TerrainType(r), Path.GetFileName(tp.Path)); }
                                     catch (Exception ex2) { Log.Error("Adding variety layer from " + tp.Path + " failed", ex2); idx = -1; }
                                     if (idx >= 0) { tp.Index = idx; tp.Path = null; addedMore = true; }
-                                    Application.DoEvents();
+                                    Injector.Pump();
                                 }
                                 if (idx > 0 && !taken.Contains(idx)) { taken.Add(idx); l.Add(new KeyValuePair<int, float>(idx, tp.Share)); }
                             }
@@ -815,8 +809,6 @@ namespace CawPlus
                         MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
                 { SetBusy(false); Status("Cancelled."); return; }
 
-                // 3-4. Masks, manual edits, old layers and the per-chunk limit: worked out on a worker thread so CAW stays
-                // responsive (the tester's v0.40 test: Auto-Paint froze CAW). CAW is only asked for names here, up front.
                 PaintSettings s = ReadSettings();
                 s.WaterOffset = terrain.WaterOffset;
                 PaintJob job = new PaintJob();
@@ -836,7 +828,8 @@ namespace CawPlus
                 for (int i = 0; i < count; i++) job.Names[i] = Caw.LayerName(terr, i);
                 job.EdgeLayer = edgeIdx; job.ChunkLimit = (int)nudChunk.Value;
                 // 3-4. Masks, manual edits, old layers, the per-chunk limit and the layer PNGs: in CAWPlusHelper (64-bit,
-                // no memory squeeze) or, without it, on a worker thread here. CAW only imports what it lists.
+                // no memory squeeze) or, without it, on a worker thread here. CAW is only asked for layer names, up front,
+                // and only imports what the job lists.
                 foreach (string old in Directory.Exists(job.OutDir) ? Directory.GetFiles(job.OutDir, "layer_*.png") : new string[0])
                     try { File.Delete(old); } catch { }
                 RunInBackground(delegate () { Helper.Paint(job, BgProgress); return null; });
@@ -856,7 +849,7 @@ namespace CawPlus
                     catch (Exception ex) { Log.Error("Import of layer " + idx + " failed", ex); }
                     if (ok) ManualEdits.Record(state, idx, Caw.LayerName(terr, idx), p, runId);
                     else failed.Add(idx.ToString());
-                    Application.DoEvents();
+                    Injector.Pump();
                 }
                 foreach (int idx in job.Cleared)
                 {
@@ -1092,6 +1085,7 @@ namespace CawPlus
         {
             using (OpenFileDialog d = new OpenFileDialog())
             {
+                d.RestoreDirectory = true; // the process-wide current folder stays where it was
                 d.Title = "Image of the distant terrain (texture or screenshot)";
                 d.Filter = "Images|*.dds;*.png;*.jpg;*.jpeg;*.bmp|All files|*.*";
                 if (d.ShowDialog(this) != DialogResult.OK) return;
@@ -1104,6 +1098,7 @@ namespace CawPlus
         {
             using (OpenFileDialog d = new OpenFileDialog())
             {
+                d.RestoreDirectory = true; // the process-wide current folder stays where it was
                 d.Title = "Grass texture to recolour for the edges";
                 d.Filter = "Textures|*.dds;*.png;*.jpg;*.bmp|All files|*.*";
                 if (textureFolder != null) d.InitialDirectory = textureFolder;
@@ -1287,7 +1282,7 @@ namespace CawPlus
                     foreach (string f in wr.Failed) Log.Info("  could not read " + f);
                 }
                 Status("Looking in the game files...");
-                Application.DoEvents();
+                Injector.Pump();
                 List<string> game = WorldTextures.FromGame(wanted, outRoot, have, DistantTerrain.Resource);
                 Log.Info("World textures from the game files: " + game.Count + (game.Count > 0 ? " (" + string.Join(", ", game.ToArray()) + ")" : ""));
                 List<string> still = new List<string>();
@@ -1382,7 +1377,7 @@ namespace CawPlus
                         catch (Exception ex) { Log.Error("Reading layer " + i + " for style failed", ex); }
                     }
                     layers.Add(g);
-                    Application.DoEvents();
+                    Injector.Pump();
                 }
                 OnProgress("Learning", 95);
                 StyleProfile p = StyleProfile.Learn(name, Caw.WorldName(world), h, terrain.CellMeters * f, terrain.WaterLevel,
@@ -1562,7 +1557,7 @@ namespace CawPlus
             {
                 int pct = bgPct;
                 if (pct >= 0) { progress.Value = Math.Max(0, Math.Min(100, pct)); status.Text = bgStage + "..."; }
-                Application.DoEvents();
+                Injector.Pump();
             }
             bgPct = -1;
             if (error != null) throw new InvalidOperationException(error.Message, error);

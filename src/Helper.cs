@@ -2,12 +2,11 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
-using System.Threading;
 
 namespace CawPlus
 {
     /// <summary>
-    /// Runs the terrain generator in CAWPlusHelper.exe (folder CAWPlusHelper next to CAWPlus.exe): a 64-bit .NET 8+
+    /// Runs CAW Plus's heavy computation (terrain generation, Auto-Paint masks, road planning) in CAWPlusHelper.exe (folder CAWPlusHelper next to CAWPlus.exe): a 64-bit .NET 8+
     /// program, so it's faster than CAW's 32-bit .NET 2 and isn't squeezed into CAW's memory. The job goes through a
     /// temporary folder (HelperLink). If the helper is missing, can't start (no .NET runtime) or fails, the same code runs
     /// inside CAW as before. Call from a worker thread: it waits for the helper.
@@ -119,8 +118,21 @@ namespace CawPlus
             return RoadPlanner.PlanChecked(coarse, rs, tries, stop, out checks);
         }
 
+        private static bool swept;
+
         private static string NewJobDir()
         {
+            // job folders a stopped job or a closed CAW left behind (the helper still had files open): gone after a day
+            if (!swept)
+            {
+                swept = true;
+                try
+                {
+                    foreach (string old in Directory.GetDirectories(Path.GetTempPath(), "CAWPlus_job_*"))
+                        try { if (Directory.GetLastWriteTimeUtc(old) < DateTime.UtcNow.AddDays(-1)) Directory.Delete(old, true); } catch { }
+                }
+                catch { }
+            }
             string dir = Path.Combine(Path.GetTempPath(), "CAWPlus_job_" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(dir);
             return dir;
@@ -152,7 +164,7 @@ namespace CawPlus
                 string progressFile = Path.Combine(dir, "progress.txt"), last = "";
                 while (!p.WaitForExit(100))
                 {
-                    if (stop != null && stop.Requested) { try { p.Kill(); } catch { } return false; }
+                    if (stop != null && stop.Requested) { try { p.Kill(); p.WaitForExit(2000); } catch { } return false; } // let go of the job folder before it is deleted
                     if (progress != null && File.Exists(progressFile))
                     {
                         string t = "";
@@ -183,8 +195,7 @@ namespace CawPlus
                                              TerrainProfile target, float water, int tries, Work.Stop stop, out TerrainChecks.Result checks)
         {
             checks = null;
-            string dir = Path.Combine(Path.GetTempPath(), "CAWPlus_job_" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(dir);
+            string dir = NewJobDir();
             try
             {
                 StringBuilder sb = new StringBuilder();
@@ -200,19 +211,47 @@ namespace CawPlus
                 if (!RunJob("terrain", dir, progress, stop)) return null;
                 string result = Path.Combine(dir, "result.bin");
                 if (!File.Exists(result)) return null;
-                {
-                    int seed;
-                    TerrainGen.Result res = HelperLink.ReadResult(result, out seed);
-                    g.Seed = seed;
-                    checks = HelperLink.ReadChecks(Path.Combine(dir, "checks.txt"));
-                    if (!announced) { announced = true; Log.Info("Terrain worked out by CAWPlusHelper (64-bit)"); }
-                    return res;
-                }
+                int seed;
+                TerrainGen.Result res = HelperLink.ReadResult(result, out seed);
+                g.Seed = seed;
+                checks = HelperLink.ReadChecks(Path.Combine(dir, "checks.txt"));
+                if (!announced) { announced = true; Log.Info("Terrain worked out by CAWPlusHelper (64-bit)"); }
+                return res;
             }
             finally
             {
                 try { Directory.Delete(dir, true); } catch { }
             }
+        }
+
+        /// <summary>
+        /// The World Builder's land from its squares (WorldSketch.Build), in the helper when it can be used, else here.
+        /// </summary>
+        public static TerrainGen.Result BuildSketch(WorldSketch sketch, int size, float worldSize, float sea, bool full, ProgressFn progress)
+        {
+            if (Available)
+            {
+                string dir = NewJobDir();
+                try
+                {
+                    File.WriteAllText(Path.Combine(dir, "sketch.txt"), sketch.ToText());
+                    StringBuilder sb = new StringBuilder();
+                    sb.Append("size=").Append(size).Append('\n');
+                    sb.Append("worldSize=").Append(HelperLink.F(worldSize)).Append('\n');
+                    sb.Append("sea=").Append(HelperLink.F(sea)).Append('\n');
+                    sb.Append("full=").Append(full).Append('\n');
+                    File.WriteAllText(Path.Combine(dir, "job.txt"), sb.ToString());
+                    string result = Path.Combine(dir, "result.bin");
+                    if (RunJob("sketch", dir, progress, null) && File.Exists(result))
+                    {
+                        int seed;
+                        return HelperLink.ReadResult(result, out seed);
+                    }
+                }
+                catch (Exception ex) { Log.Error("CAWPlusHelper failed on the World Builder's land; working it out inside CAW instead", ex); }
+                finally { try { Directory.Delete(dir, true); } catch { } }
+            }
+            return sketch.Build(size, worldSize, sea, full);
         }
 
         private static string Trim(string s) { s = s.Trim(); return s.Length > 1500 ? s.Substring(0, 1500) + "..." : s; }

@@ -3,7 +3,10 @@ using System.Collections.Generic;
 
 namespace CawPlus
 {
-    public enum PlaceKind { Tree = 0, Bush = 1, Rock = 2, Other = 3, Streetlight = 4, Sign = 5, Spawner = 6, Fence = 7 }
+    public enum PlaceKind { Tree = 0, Bush = 1, Rock = 2, Other = 3, Streetlight = 4, Sign = 5, Spawner = 6, Fence = 7, Detail = 8 }
+
+    /// <summary>The base-game street details Auto-Place lays (PlacementEngine.StreetDetails).</summary>
+    public enum StreetDetail { None, Drain, Manhole, Hydrant, Fence, FencePost, Welcome, NbhdSign, Billboard }
 
     public enum Biome { Temperate, MixedForest, Boreal, Tropical, Desert, Mediterranean }
 
@@ -23,6 +26,7 @@ namespace CawPlus
         public bool BuyPlant;            // a tree/bush/flower that is a buy-mode game object (garden plants, harvestables), not EA scenery
         public bool WaterPlant;          // reeds, cattails, lilies: on river and pond banks
         public RefObject Ref;            // this item in the reference world, if any
+        public StreetDetail Detail;      // for PlaceKind.Detail: which street detail it is
         public override string ToString() { return Name; }
     }
 
@@ -38,7 +42,7 @@ namespace CawPlus
         public Grid WaterOffset;
         public ObjectLibrary Library;    // optional reference world: habitat per item and density target
         public bool MatchLibraryDensity;
-        public float[] FillScale = { 1, 1, 1, 1, 1, 1, 1, 1 }; // per PlaceKind, set by FitDensity
+        public float[] FillScale = { 1, 1, 1, 1, 1, 1, 1, 1, 1 }; // per PlaceKind, set by FitDensity
         public bool WaterPlants = true;            // reeds etc. on river and pond banks
         public int MaxObjects = 10000;             // budget for the whole world, objects already there included
         public float StreetlightSpacing = 32;      // metres along a road (Appaloosa Plains: ~32 m)
@@ -48,7 +52,10 @@ namespace CawPlus
         public List<List<float[]>> Bridges;        // road pieces on bridges, map coordinates: no streetlights or signs near them
         public float TreeSlopeStart = 24;          // trees thin from here to none 14 deg steeper: where rock paint starts
         public float MapW, MapH;                   // full map size in map pixels (for Bridges)
-        public const int Kinds = 8;
+        public byte[] PlanCodes; public int PlanN; // the painted plan (PlanArea per cell, PlanN x PlanN over the whole map, #171); null = none
+        public bool WoodsOnlyInForest;            // World Builder (#173): woodland only in the forest drawn, a few trees elsewhere
+        public List<float[]> Lots;                 // lots as (mapX, mapY, radius) in map pixels: town roads are lot-lined
+        public const int Kinds = 9;
     }
 
     public struct Placement
@@ -100,6 +107,15 @@ namespace CawPlus
             "kitchen", "dining", "nursery", "office", "pc", "poster", "wallpaper", "floor", "ceiling", "doorway", "window", "door" };
         // EA's own outdoor objects by catalog instance, from the bundled reference worlds (signs, streetlights, spawners, rocks...)
         public static readonly Dictionary<string, PlaceKind> Known = new Dictionary<string, PlaceKind>();
+
+        /// <summary>Fills Known from every reference library (EA objects by instance).</summary>
+        public static void LoadKnown()
+        {
+            Known.Clear();
+            foreach (ObjectLibrary l in ObjectLibrary.LoadAll())
+                foreach (RefObject r in l.Items)
+                    if (r.Instance != null && r.Instance.Length == 16 && !Known.ContainsKey(r.Instance)) Known[r.Instance] = r.Kind;
+        }
         private static readonly string[] FenceWords = { "fence", "fences", "fencing" };
         // Anything with one of these words is not natural scenery, whatever else its name says.
         private static readonly string[] NotNature = { "statue", "relic", "fence", "fencing", "gate", "gating", "fireplace", "firepit", "fire",
@@ -307,7 +323,8 @@ namespace CawPlus
         public sealed class Maps
         {
             public Grid Forest, Bush, Rock, Blocked;   // 0..1 each; Blocked 1 = nothing may go here
-            public Grid Hard;                          // water and lots only (roadside objects may go near roads)
+            public bool WoodsOnlyInForest;             // PlaceSettings.WoodsOnlyInForest: the trees keep to the forest drawn, not to the roads
+            public Grid Hard;                          // water only (roadside objects may go near roads; lots are only in Blocked)
             public Grid Slope, Rel, NearWater;
             public Grid Alt;           // height above the water as a share of the highest land (0 shore .. 1 peaks)
             public Grid FreshBank;     // 1 on the banks of rivers, streams and ponds (not the open sea)
@@ -330,6 +347,39 @@ namespace CawPlus
         /// Density maps on a working grid ('h' at 'cell' metres). 'blockedExtra' marks roads/lots/edges already
         /// rasterised by the caller (1 = blocked).
         /// </summary>
+        /// <summary>
+        /// The painted plan at map cell (x, y) (#171): forest = full woodland with bushes at its edges, park = scattered
+        /// trees, town centre and houses = a few garden trees, keep clear = nothing at all.
+        /// </summary>
+        private static void ApplyPlan(Maps m, PlaceSettings s, int x, int y, int W, int H, float clump, float scatter)
+        {
+            int n = s.PlanN, i = y * W + x;
+            int px = Math.Min(n - 1, x * n / W), py = Math.Min(n - 1, y * n / H);
+            switch ((PlanArea)s.PlanCodes[py * n + px])
+            {
+                case PlanArea.Forest:
+                    m.Forest.D[i] = Math.Max(m.Forest.D[i], 0.75f + 0.25f * clump);
+                    m.Bush.D[i] = Math.Max(m.Bush.D[i], 0.35f);
+                    break;
+                case PlanArea.Park:
+                    m.Forest.D[i] = 0.35f * Grid.Ramp(scatter, 0.45f, 0.8f);
+                    m.Rock.D[i] *= 0.3f;
+                    break;
+                case PlanArea.Centre:
+                case PlanArea.Houses:
+                    m.Forest.D[i] *= 0.3f; m.Rock.D[i] *= 0.3f;
+                    break;
+                case PlanArea.KeepClear:
+                    m.Forest.D[i] = m.Bush.D[i] = m.Rock.D[i] = 0;
+                    m.Blocked.D[i] = 1;
+                    break;
+                case PlanArea.None:
+                case PlanArea.Countryside:
+                    if (s.WoodsOnlyInForest) { m.Forest.D[i] *= 0.15f; m.Bush.D[i] *= 0.5f; }
+                    break;
+            }
+        }
+
         public static Maps BuildMaps(Grid h, float cell, PlaceSettings s, Grid blockedExtra)
         {
             int W = h.W, H = h.H, N = W * H;
@@ -360,18 +410,21 @@ namespace CawPlus
                 m.Alt.D[i] = Math.Max(0, Math.Min(1, (h.D[i] - s.WaterLevel) / landSpan));
             }
             m.NearWater = water.Blur(15f * px);
-            // fresh water: ponds, and narrow water (rivers, streams: no point of it within ~40 m is more than 30 m from
-            // land), unlike the sea, big lakes and the strip of sea along the map edge
-            Grid inWater = LandDistance(water, cell), widest = SlidingMax(inWater, (int)Math.Ceiling(40f * px)), fresh = new Grid(W, H);
-            int rim = (int)Math.Ceiling(30f * px);
-            for (int y = 0; y < H; y++)
-                for (int x = 0; x < W; x++)
-                {
-                    int i = y * W + x;
-                    bool pond = s.WaterOffset != null && s.WaterOffset.D[i] > 0;
-                    bool river = widest.D[i] < 30f && x >= rim && y >= rim && x < W - rim && y < H - rim;
-                    fresh.D[i] = water.D[i] > 0 && (pond || river) ? 1 : 0;
-                }
+            // fresh water: everything but the sea. The sea = open water (over ~120 m across) joined to the map edge, or a
+            // very large body, plus the water within 65 m of it. A river stays a river right down to its mouth and where it
+            // widens inland (the tester's 2026-10-26 test: stretches of river near the coast and wider bends counted as sea;
+            // the old rule called any water over ~60 m wide, or within 30 m of the map edge, sea)
+            Grid inWater = LandDistance(water, cell), fresh = new Grid(W, H);
+            Grid seaCore = OpenSea(water, inWater, cell);
+            Grid notSea = new Grid(W, H);
+            for (int i = 0; i < N; i++) notSea.D[i] = seaCore.D[i] > 0 ? 0 : 1;
+            Grid toSea = LandDistance(notSea, cell);
+            for (int i = 0; i < N; i++)
+            {
+                bool pond = s.WaterOffset != null && s.WaterOffset.D[i] > 0;
+                bool atSea = seaCore.D[i] > 0 || toSea.D[i] <= SeaCore + 5;
+                fresh.D[i] = water.D[i] > 0 && (pond || !atSea) ? 1 : 0;
+            }
             m.Water = water; m.Fresh = fresh; m.FromLand = inWater;
             // learned placement score features (tools/placescore.py)
             Grid hs40 = h.Blur(20f * px), mean30 = h.Blur(17f * px), dry = new Grid(W, H);
@@ -400,6 +453,7 @@ namespace CawPlus
             Grid clumps = Grid.Fbm(W, H, 25f * px, 3, new Random(rng.Next()));
             Grid scatter = Grid.Fbm(W, H, 40f * px, 3, new Random(rng.Next()));
 
+            m.WoodsOnlyInForest = s.PlanCodes != null && s.WoodsOnlyInForest;
             m.Forest = new Grid(W, H); m.Bush = new Grid(W, H); m.Rock = new Grid(W, H); m.Blocked = new Grid(W, H); m.Hard = new Grid(W, H);
             // the edge border: the distant terrain covers the map's rim, so nothing is placed there
             m.Edge = new Grid(W, H);
@@ -427,6 +481,7 @@ namespace CawPlus
                 // Rocks: steep ground, high ground, and the odd one in the open.
                 m.Rock.D[i] = Math.Min(1, 0.8f * Grid.Ramp(sl, 15, 35) + 0.3f * Grid.Ramp(m.Rel.D[i], 0.75f, 1f) * Grid.Ramp(sl, 5, 15)
                                           + 0.08f * Grid.Ramp(scatter.D[i], 0.7f, 1f));
+                if (s.PlanCodes != null) ApplyPlan(m, s, i % W, i / W, W, H, clumps.D[i], scatter.D[i]);
             }
             // beaches: land within 15 m of the sea (not rivers or ponds), under 2 m above it and gentle, where Auto-Paint
             // puts sand; trees there only if they are palms (EA's beaches are bare or palm-lined)
@@ -476,6 +531,97 @@ namespace CawPlus
         }
 
         /// <summary>For water cells (water = 1): metres to the nearest land (two-pass chamfer); 0 on land.</summary>
+        /// <summary>
+        /// The open sea's core: water at least SeaCore m from land (over ~120 m across), in bodies that touch the map edge
+        /// or lie in a body of open water of 80 ha or more (a lagoon; Riverview's lakes are ~30 ha). Wide stretches of a river (Champs Les Sims' is 60-100 m) or an inland lake are left out.
+        /// </summary>
+        private const float SeaCore = 60f;
+
+        private static Grid OpenSea(Grid water, Grid inWater, float cell)
+        {
+            int W = water.W, H = water.H;
+            Grid core = new Grid(W, H);
+            int[] comp = new int[W * H];
+            float ha = cell * cell / 10000f;
+            int id = 0;
+            Queue<int> q = new Queue<int>();
+            List<int> cells = new List<int>();
+            for (int start = 0; start < comp.Length; start++)
+            {
+                if (comp[start] != 0 || water.D[start] <= 0 || inWater.D[start] < SeaCore) continue;
+                id++; cells.Clear(); bool edge = false;
+                comp[start] = id; q.Enqueue(start);
+                while (q.Count > 0)
+                {
+                    int k = q.Dequeue(), x = k % W, y = k / W;
+                    cells.Add(k);
+                    if (x == 0 || y == 0 || x == W - 1 || y == H - 1) edge = true;
+                    for (int d = 0; d < 4; d++)
+                    {
+                        int nx = x + (d == 0 ? -1 : d == 1 ? 1 : 0), ny = y + (d == 2 ? -1 : d == 3 ? 1 : 0);
+                        if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+                        int n = ny * W + nx;
+                        if (comp[n] != 0 || water.D[n] <= 0 || inWater.D[n] < SeaCore) continue;
+                        comp[n] = id; q.Enqueue(n);
+                    }
+                }
+                // a body touching the map edge reaches its 30 m line only short of the edge: count cells near it too
+                if (!edge)
+                    foreach (int k in cells)
+                    {
+                        int x = k % W, y = k / W;
+                        if (Math.Min(Math.Min(x, y), Math.Min(W - 1 - x, H - 1 - y)) * cell <= 40f) { edge = true; break; }
+                    }
+                if (!edge && BodyHectares(water, inWater, cells[0], W, H, ha, 80f) >= 80f) edge = true; // a lagoon or large bay
+                if (edge) foreach (int k in cells) core.D[k] = 1;
+            }
+            // open water joined to that sea by a short channel (a lagoon behind its reef, a harbour: within 400 m of open
+            // sea through the water) is sea too; a lake a
+            // river runs into further up is not
+            int[] steps = new int[W * H];
+            for (int k = 0; k < steps.Length; k++) steps[k] = -1;
+            int reach = (int)Math.Ceiling(400f / cell);
+            for (int k = 0; k < steps.Length; k++) if (core.D[k] > 0) { steps[k] = 0; q.Enqueue(k); }
+            Dictionary<int, bool> joined = new Dictionary<int, bool>();
+            while (q.Count > 0)
+            {
+                int k = q.Dequeue(), x = k % W, y = k / W;
+                if (comp[k] > 0 && core.D[k] <= 0) joined[comp[k]] = true;
+                if (steps[k] >= reach) continue;
+                for (int d = 0; d < 4; d++)
+                {
+                    int nx = x + (d == 0 ? -1 : d == 1 ? 1 : 0), ny = y + (d == 2 ? -1 : d == 3 ? 1 : 0);
+                    if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+                    int n = ny * W + nx;
+                    if (steps[n] >= 0 || water.D[n] <= 0) continue;
+                    steps[n] = steps[k] + 1; q.Enqueue(n);
+                }
+            }
+            if (joined.Count > 0)
+                for (int k = 0; k < comp.Length; k++) if (comp[k] > 0 && joined.ContainsKey(comp[k])) core.D[k] = 1;
+            return core;
+        }
+
+        /// <summary>Hectares of the open water (over ~30 m across) joined to cell 'start', counted up to 'cap'.</summary>
+        private static float BodyHectares(Grid water, Grid inWater, int start, int W, int H, float ha, float cap)
+        {
+            Dictionary<int, bool> seen = new Dictionary<int, bool>();
+            Queue<int> q = new Queue<int>(); q.Enqueue(start); seen[start] = true;
+            while (q.Count > 0 && seen.Count * ha < cap)
+            {
+                int k = q.Dequeue(), x = k % W, y = k / W;
+                for (int d = 0; d < 4; d++)
+                {
+                    int nx = x + (d == 0 ? -1 : d == 1 ? 1 : 0), ny = y + (d == 2 ? -1 : d == 3 ? 1 : 0);
+                    if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+                    int n = ny * W + nx;
+                    if (seen.ContainsKey(n) || water.D[n] <= 0 || inWater.D[n] < 15f) continue;
+                    seen[n] = true; q.Enqueue(n);
+                }
+            }
+            return seen.Count * ha;
+        }
+
         private static Grid LandDistance(Grid water, float cell)
         {
             int W = water.W, H = water.H;
@@ -507,28 +653,6 @@ namespace CawPlus
             return d;
         }
 
-        /// <summary>Largest value within r cells (square window), separable.</summary>
-        private static Grid SlidingMax(Grid g, int r)
-        {
-            int W = g.W, H = g.H;
-            Grid t = new Grid(W, H), o = new Grid(W, H);
-            for (int y = 0; y < H; y++)
-                for (int x = 0; x < W; x++)
-                {
-                    float m = 0;
-                    for (int k = Math.Max(0, x - r); k <= Math.Min(W - 1, x + r); k++) m = Math.Max(m, g.D[y * W + k]);
-                    t.D[y * W + x] = m;
-                }
-            for (int y = 0; y < H; y++)
-                for (int x = 0; x < W; x++)
-                {
-                    float m = 0;
-                    for (int k = Math.Max(0, y - r); k <= Math.Min(H - 1, y + r); k++) m = Math.Max(m, t.D[k * W + x]);
-                    o.D[y * W + x] = m;
-                }
-            return o;
-        }
-
         private static void Equalize(Grid g)
         {
             const int B = 2048;
@@ -558,6 +682,7 @@ namespace CawPlus
             // roadside things first, so nature keeps clear of them
             Streetlights(m, cell, scale, items, s, rng, hash, result);
             Signs(m, cell, scale, items, s, rng, hash, result);
+            StreetDetails(m, cell, scale, items, s, rng, hash, result);
             // kind, spacing (m), keep-out radius (m), map, peak fill probability
             float treeFill = (0.05f + 0.75f * s.TreeDensity / 100f) * s.FillScale[0];
             // a Like world with its forests decoded (#66): trees in its groups and spacing (EA's nearest tree is 3-15 m)
@@ -615,7 +740,7 @@ namespace CawPlus
                 foreach (Placement p in plan) n[(int)items[p.Item].Kind]++;
                 bool done = true;
                 note = "";
-                foreach (PlaceKind kind in new[] { PlaceKind.Tree, PlaceKind.Bush, PlaceKind.Rock, PlaceKind.Other, PlaceKind.Spawner })
+                foreach (PlaceKind kind in new[] { PlaceKind.Tree, PlaceKind.Bush, PlaceKind.Rock })
                 {
                     if (kind == PlaceKind.Tree && s.Library.TreeCountIncomplete) continue; // the Trees sliders decide
                     if (n[(int)kind] == 0 && s.FillScale[(int)kind] == 1) continue; // kind not being placed
@@ -704,14 +829,14 @@ namespace CawPlus
             // as near to roads as the reference world puts them (EA's rocks are mostly 30-240 m from a road, rarely
             // further). Trees only when the library holds the forests (cluster trees), not just the town's single trees.
             bool forests = kind != PlaceKind.Tree || (lib != null && !lib.TreeCountIncomplete);
-            bool roadPref = shape != null && shape.Road != null && forests;
+            bool roadPref = shape != null && shape.Road != null && forests && !(m.WoodsOnlyInForest && kind == PlaceKind.Tree);
             // and where on the land: the reference world's slope / height / water bands for the whole kind, times its
             // road distances, replace the built-in rule (kept at half strength for local variety)
-            RefObject habitat = lib != null && !waterPlants && forests ? lib.KindHabitat(kind) : null;
+            RefObject habitat = lib != null && !waterPlants && forests && !(m.WoodsOnlyInForest && kind == PlaceKind.Tree) ? lib.KindHabitat(kind) : null;
             // the learned score (#96): EA's likelihood ratios for this kind over slope, hollows, height above the sea and
             // the distances to water and roads, multiplied (softened to the 0.8th power), replace the habitat bands
             Dictionary<string, float[][]> learnedScore = null;
-            if (lib != null && !waterPlants && forests && UseLearnedScore) lib.Scores.TryGetValue(kind.ToString(), out learnedScore);
+            if (lib != null && !waterPlants && forests && UseLearnedScore && !(m.WoodsOnlyInForest && kind == PlaceKind.Tree)) lib.Scores.TryGetValue(kind.ToString(), out learnedScore);
             if (learnedScore != null)
             {
                 Grid learned = new Grid(W, H);
@@ -870,9 +995,9 @@ namespace CawPlus
         }
 
         /// <summary>
-        /// Streetlights every 'StreetlightSpacing' m along each road, alternating sides, facing the road, 6.2 m off the
-        /// centre line (or the Like world's offset); with a Like world, only on the road nearest the junctions, up to
-        /// the share of road that world lights.
+        /// Streetlights along each road, one per 'StreetlightSpacing' m of road, facing the road, 6.2 m off the centre line
+        /// (or the World type's offset); alternating sides, or in opposite pairs at the World type's share of stops; with a
+        /// World type, only on the road nearest the junctions, up to the share of road that world lights.
         /// </summary>
         private static void Streetlights(Maps m, float cell, float scale, List<PlaceItem> items, PlaceSettings s, Random rng, SpatialHash hash, List<Placement> result)
         {
@@ -891,8 +1016,13 @@ namespace CawPlus
             // are spaced so the lights per km stay the same ('step' is metres of road per light)
             float pairs = lib != null ? lib.LightPairs() : 0;
             float stop = step * (1 + pairs), keep = Math.Min(step, 2 * off) * 0.4f;
-            foreach (List<float[]> road in s.Roads)
+            // one lamp type along each road (the tester: mixed lamps on one road looked random): CAW's pieces joined into
+            // roads between junctions, each given one type from the pool
+            List<Chain> chains = Chains(s.Roads, s.Junctions ?? new List<float[]>(), mpm, m.Forest.W * scale, m.Forest.H * scale);
+            foreach (Chain chain in chains)
             {
+                List<float[]> road = chain.P;
+                int lamp = PickWeighted(items, pool, rng);
                 float carry = stop * 0.5f; int side = rng.Next(2) == 0 ? 1 : -1;
                 for (int k = 1; k < road.Count; k++)
                 {
@@ -910,13 +1040,26 @@ namespace CawPlus
                             float px = ax + tx * d - ty * off * sd, py = ay + ty * d + tx * off * sd;
                             if (HardAt(m, px, py, scale) || BlockedEdge(m, px, py, scale) || NearBridge(m, px, py, scale) || hash.Near(px, py, keep)) continue;
                             // face the road: the lamp's front points back towards the centre line
-                            float yaw = (float)Math.Atan2(ty * sd, -tx * sd);
-                            Add(result, hash, PickWeighted(items, pool, rng), px, py, yaw, rng, 2f * mpm);
+                            float yaw = (float)Math.Atan2(ty * sd, -tx * sd) + LampTurn(items[lamp]);
+                            Add(result, hash, lamp, px, py, yaw, rng, 2f * mpm);
                         }
                     }
                     carry = (carry - len) % stop; if (carry < 0) carry += stop;
                 }
             }
+        }
+
+        /// <summary>
+        /// Extra turn (radians) for lamp models whose front isn't the side they light: measured on EA's own worlds
+        /// (library/lamp_facing.json, 30 lamp models in 22 worlds): most face the road (Basic 86%, City 92%, Country 98%),
+        /// these three stand turned a quarter (their arm reaches sideways from the front). Lamps EA turns every way (round
+        /// or two-armed: Aurora Skies' DOT08, Resort, Gothic, Future) face the road too.
+        /// </summary>
+        private static float LampTurn(PlaceItem item)
+        {
+            string r = ResourceName(item.Name).ToLowerInvariant();
+            if (r == "lightingoutdoorstreetfrance" || r == "lightingoutdoorstreetcampus" || r == "lightingoutdoorstreeteuro") return -(float)Math.PI / 2;
+            return 0;
         }
 
         private static float NearestJunction(List<float[]> js, float x, float y)
@@ -1183,6 +1326,372 @@ namespace CawPlus
             // the sign's face towards the oncoming traffic (front = -d; same yaw convention as the streetlights)
             float yaw = (float)Math.Atan2(-d[0], -d[1]);
             Add(result, hash, PickWeighted(items, pool, rng), px, py, yaw, rng, 2f * mpm);
+            return true;
+        }
+
+        // ---------- street details ----------
+
+        /// <summary>The base-game street details (resource name, instance; group 0), measured in EA's layer files.</summary>
+        public static readonly string[] DetailNames = { "RoadGrateDrain", "RoadSewer", "FireHydrant", "nbhFenceSplitrail", "nbhFenceSplitrailPost",
+            "SignWelcome", "SignNbhd_traditional", "SignNbhd_beach", "SignNbhd_contemporary", "SignNbhd_country", "SignNbhd_mission", "SignNbhd_Modern",
+            "SignBillboard", "SignBillboard1", "SignBillboard2", "SignBillboard3", "SignBillboard4" };
+        public static readonly ulong[] DetailIds = { 0xdafUL, 0xcebUL, 0xd19UL, 0xb37UL, 0xb38UL,
+            0xd3dUL, 0xca0UL, 0xca1UL, 0xca2UL, 0xca3UL, 0xca4UL, 0xcb9UL,
+            0x7ccUL, 0xd78UL, 0xd79UL, 0xd7aUL, 0xd7bUL };
+        public static readonly StreetDetail[] DetailRoles = { StreetDetail.Drain, StreetDetail.Manhole, StreetDetail.Hydrant, StreetDetail.Fence, StreetDetail.FencePost,
+            StreetDetail.Welcome, StreetDetail.NbhdSign, StreetDetail.NbhdSign, StreetDetail.NbhdSign, StreetDetail.NbhdSign, StreetDetail.NbhdSign, StreetDetail.NbhdSign,
+            StreetDetail.Billboard, StreetDetail.Billboard, StreetDetail.Billboard, StreetDetail.Billboard, StreetDetail.Billboard };
+
+        /// <summary>True for the town signs and billboards (their own Auto-Place option), false for the street details.</summary>
+        public static bool IsTownSign(StreetDetail d) { return d == StreetDetail.Welcome || d == StreetDetail.NbhdSign || d == StreetDetail.Billboard; }
+
+        /// <summary>
+        /// Drains, manholes, fire hydrants and split-rail fences, placed as EA's worlds place them (scratch street study on
+        /// the layer files of Sunset Valley, Hidden Springs, Sims University and 9 more):
+        /// - drains (RoadGrateDrain): at town junctions (3+ lots within 80 m), two on each road arriving, one at each kerb,
+        ///   6.5 m from the junction centre and 3.7 m off the centre line, facing across the road (Sunset Valley: 6 at a T,
+        ///   8 at a crossroads, at 18 of its 30 junctions; the rest have no lots near); two more before a town dead end;
+        /// - manholes (RoadSewer): in the lane, 1.9 m off the centre line, on lot-lined roads, at least 70 m apart (Sunset
+        ///   Valley: 40 on 7.9 km, 5.1 per km, nearest 46 m apart);
+        /// - hydrants (FireHydrant): on the verge 5.5 m out facing the road, on lot-lined roads, at least 140 m apart, and at
+        ///   about a third of the town junctions 8 m in (Hidden Springs, Sims University: 0.8-2.4 per km, 58-90 m apart,
+        ///   75-83% beside a lot);
+        /// - split-rail fences: chains of 3-8 rails 6 m long, each rail turned across the run, a post at each end, about one
+        ///   chain per km of road: along country roads 10-14 m out, or out from a lot into its field (12 worlds: 3-9 chains
+        ///   of 15-60 m each).
+        /// </summary>
+        private static void StreetDetails(Maps m, float cell, float scale, List<PlaceItem> items, PlaceSettings s, Random rng, SpatialHash hash, List<Placement> result)
+        {
+            if (s.Roads == null || s.Roads.Count == 0) return;
+            int[] pick = new int[(int)StreetDetail.Billboard + 1];
+            for (int i = 0; i < pick.Length; i++) pick[i] = -1;
+            for (int i = 0; i < items.Count; i++) if (items[i].Selected && items[i].Kind == PlaceKind.Detail) pick[(int)items[i].Detail] = i;
+            bool any = false;
+            foreach (int k in pick) if (k >= 0) any = true;
+            if (!any) return; // (and the random sequence for the rest stays as it was)
+            float mpm = scale / cell;
+            TownSigns(m, scale, mpm, items, s, rng, hash, result);
+            List<float[]> lots = s.Lots ?? new List<float[]>();
+            // lots within 'r' metres of a map point
+            Func2 lotsNear = delegate (float x, float y, float r)
+            {
+                int n = 0; float rr = r * mpm;
+                foreach (float[] l in lots) if ((l[0] - x) * (l[0] - x) + (l[1] - y) * (l[1] - y) < (rr + l[2]) * (rr + l[2])) n++;
+                return n;
+            };
+            List<float[]> junctions = s.Junctions ?? new List<float[]>();
+            float km = 0;
+            foreach (List<float[]> road in s.Roads)
+                for (int k = 1; k < road.Count; k++) km += Dist(road[k - 1], road[k]) / mpm / 1000f;
+
+            // drains at town junctions and before town dead ends
+            if (pick[(int)StreetDetail.Drain] >= 0)
+            {
+                foreach (float[] j in junctions)
+                {
+                    if (lotsNear(j[0], j[1], 80) < 3) continue;
+                    foreach (float[] u in RoadsLeaving(s.Roads, j, 15 * mpm))
+                        Kerbs(m, scale, mpm, hash, result, rng, pick[(int)StreetDetail.Drain], j[0] + u[0] * 6.5f * mpm, j[1] + u[1] * 6.5f * mpm, u, 3.7f);
+                }
+                foreach (List<float[]> road in s.Roads)
+                    for (int e = 0; e < 2; e++)
+                    {
+                        float[] tip = e == 0 ? road[0] : road[road.Count - 1], prev = e == 0 ? road[Math.Min(1, road.Count - 1)] : road[Math.Max(0, road.Count - 2)];
+                        if (NearAny(junctions, tip, 15 * mpm) || EndJoined(s.Roads, road, tip, 6 * mpm) || BlockedEdge(m, tip[0], tip[1], scale)) continue;
+                        if (lotsNear(tip[0], tip[1], 60) < 1) continue;
+                        float l = Dist(prev, tip); if (l < 1e-3f) continue;
+                        float[] u = { (prev[0] - tip[0]) / l, (prev[1] - tip[1]) / l };
+                        Kerbs(m, scale, mpm, hash, result, rng, pick[(int)StreetDetail.Drain], tip[0] + u[0] * 6.5f * mpm, tip[1] + u[1] * 6.5f * mpm, u, 3.7f);
+                    }
+            }
+            // manholes and hydrants along lot-lined roads, kept apart from others of their kind (the roads come in pieces of
+            // ~45 m, so the spacing is a distance to the nearest one, not a count along each piece)
+            List<float[]> manholes = new List<float[]>(), hydrants = new List<float[]>();
+            float manholeGap = 70 * mpm, hydrantGap = 140 * mpm; // tuned to EA's rates: manholes ~5 per km (Sunset Valley), hydrants 1-2.5
+            foreach (List<float[]> road in s.Roads)
+                for (int k = 1; k < road.Count; k++)
+                {
+                    float ax = road[k - 1][0], ay = road[k - 1][1], len = Dist(road[k - 1], road[k]);
+                    if (len < 1e-3f) continue;
+                    float tx = (road[k][0] - ax) / len, ty = (road[k][1] - ay) / len;
+                    for (float d = (float)rng.NextDouble() * 6 * mpm; d < len; d += 6 * mpm)
+                    {
+                        float x = ax + tx * d, y = ay + ty * d;
+                        if (lotsNear(x, y, 40) == 0) continue;
+                        float[] here = { x, y };
+                        if (pick[(int)StreetDetail.Manhole] >= 0 && !NearAny(manholes, here, manholeGap) && rng.NextDouble() < 0.5)
+                        {
+                            float sd = rng.Next(2) == 0 ? 1 : -1;
+                            float px = x - ty * 1.9f * mpm * sd, py = y + tx * 1.9f * mpm * sd;
+                            if (!NearBridge(m, px, py, scale) && !BlockedEdge(m, px, py, scale) && !hash.Near(px, py, 6 * mpm))
+                            {
+                                Add(result, hash, pick[(int)StreetDetail.Manhole], px, py, (float)(rng.NextDouble() * Math.PI * 2), rng, 1f * mpm);
+                                manholes.Add(here);
+                            }
+                        }
+                        if (pick[(int)StreetDetail.Hydrant] >= 0 && !NearAny(hydrants, here, hydrantGap) && !NearAny(junctions, here, 12 * mpm) && rng.NextDouble() < 0.3)
+                        {
+                            float sd = rng.Next(2) == 0 ? 1 : -1;
+                            float px = x - ty * 5.5f * mpm * sd, py = y + tx * 5.5f * mpm * sd;
+                            if (!HardAt(m, px, py, scale) && !NearBridge(m, px, py, scale) && !BlockedEdge(m, px, py, scale) && !hash.Near(px, py, 4 * mpm))
+                            {
+                                Add(result, hash, pick[(int)StreetDetail.Hydrant], px, py, (float)Math.Atan2(ty * sd, -tx * sd), rng, 1f * mpm);
+                                hydrants.Add(here);
+                            }
+                        }
+                    }
+                }
+            // a hydrant at about a third of the town junctions, 8 m in along one road, on the verge
+            if (pick[(int)StreetDetail.Hydrant] >= 0)
+                foreach (float[] j in junctions)
+                {
+                    if (lotsNear(j[0], j[1], 80) < 3 || rng.NextDouble() > 0.3) continue;
+                    List<float[]> ways = RoadsLeaving(s.Roads, j, 15 * mpm);
+                    if (ways.Count == 0) continue;
+                    float[] u = ways[rng.Next(ways.Count)];
+                    float sd = rng.Next(2) == 0 ? 1 : -1;
+                    float px = j[0] + u[0] * 8 * mpm - u[1] * 5.5f * mpm * sd, py = j[1] + u[1] * 8 * mpm + u[0] * 5.5f * mpm * sd;
+                    if (!HardAt(m, px, py, scale) && !BlockedEdge(m, px, py, scale) && !hash.Near(px, py, 4 * mpm) && !NearAny(hydrants, new[] { px, py }, 40 * mpm))
+                    {
+                        Add(result, hash, pick[(int)StreetDetail.Hydrant], px, py, (float)Math.Atan2(u[1] * sd, -u[0] * sd), rng, 1f * mpm);
+                        hydrants.Add(new[] { px, py });
+                    }
+                }
+            // split-rail fences
+            if (pick[(int)StreetDetail.Fence] >= 0)
+            {
+                int want = Math.Max(2, Math.Min(12, (int)Math.Round(km))), made = 0;
+                for (int tries = 0; tries < want * 40 && made < want; tries++)
+                {
+                    List<float[]> road = s.Roads[rng.Next(s.Roads.Count)];
+                    if (road.Count < 2) continue;
+                    int k = 1 + rng.Next(road.Count - 1);
+                    float len = Dist(road[k - 1], road[k]); if (len < 1e-3f) continue;
+                    float tx = (road[k][0] - road[k - 1][0]) / len, ty = (road[k][1] - road[k - 1][1]) / len;
+                    float t = (float)rng.NextDouble() * len, x = road[k - 1][0] + tx * t, y = road[k - 1][1] + ty * t;
+                    if (NearAny(junctions, new[] { x, y }, 30 * mpm)) continue;
+                    float sd = rng.Next(2) == 0 ? 1 : -1;
+                    float[] start, dir;
+                    if (lotsNear(x, y, 70) == 0)
+                    {
+                        // a country road: the fence runs beside it, 10-14 m out
+                        float off = (10 + 4 * (float)rng.NextDouble()) * mpm;
+                        start = new[] { x - ty * off * sd, y + tx * off * sd }; dir = new[] { tx, ty };
+                    }
+                    else
+                    {
+                        // out from the side of a lot into its field: start just beyond the lot, run away from the road
+                        float[] lot = NearestLot(lots, x, y);
+                        if (lot == null) continue;
+                        float vx = lot[0] - x, vy = lot[1] - y, vl = (float)Math.Sqrt(vx * vx + vy * vy);
+                        if (vl < 1e-3f || vl > 60 * mpm) continue;
+                        float side = (tx * vy - ty * vx) > 0 ? 1 : -1; // along the road to the lot's far side
+                        start = new[] { lot[0] + tx * (lot[2] + 2 * mpm) * side * sd, lot[1] + ty * (lot[2] + 2 * mpm) * side * sd };
+                        dir = new[] { vx / vl, vy / vl };
+                    }
+                    if (Fence(m, cell, scale, mpm, hash, result, rng, pick[(int)StreetDetail.Fence], pick[(int)StreetDetail.FencePost], start, dir, 3 + rng.Next(6))) made++;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Welcome signs, neighbourhood signs and billboards, placed as in EA's layer files (scratch townobj study, 21 worlds;
+        /// facing = (sin yaw, cos yaw)). Distances from the town core are in units of the median lot's distance from it.
+        /// - welcome (SignWelcome; 7 in 5 worlds): on the roads into town just beyond the last lots (1.9 x, no lot within
+        ///   100 m), 7.8 m from the centre line, facing away from the town (read by traffic coming in); 71% on main roads;
+        /// - neighbourhood (SignNbhd_*; 32 in 11 worlds, 0.34 per km): 8.5 m out, ~38 m from a junction on the road into a
+        ///   group of lots (5 within 100 m), 0.7-1.4 x from the core, facing along the road; 72% on main roads and collectors;
+        /// - billboards (SignBillboard*; 100 in 10 worlds, 1.1 per km where a world has them): 12.6 m from the centre line
+        ///   (7.5-20), at least 15 m from a junction (median 43), never on a lot (median 21 m from its edge), 0.6-1.3 x from
+        ///   the core, facing along the road, 67% on the right of the traffic they face.
+        /// </summary>
+        private static void TownSigns(Maps m, float scale, float mpm, List<PlaceItem> items, PlaceSettings s, Random rng, SpatialHash hash, List<Placement> result)
+        {
+            List<int> welcome = new List<int>(), nbhd = new List<int>(), bill = new List<int>();
+            for (int i = 0; i < items.Count; i++)
+                if (items[i].Selected && items[i].Kind == PlaceKind.Detail)
+                {
+                    if (items[i].Detail == StreetDetail.Welcome) welcome.Add(i);
+                    else if (items[i].Detail == StreetDetail.NbhdSign) nbhd.Add(i);
+                    else if (items[i].Detail == StreetDetail.Billboard) bill.Add(i);
+                }
+            List<float[]> lots = s.Lots ?? new List<float[]>();
+            if (welcome.Count + nbhd.Count + bill.Count == 0 || lots.Count < 5) return;
+            // the town core = the lot with the most lots within 200 m; distances from it in median-lot units
+            float[] core = null; int best = -1;
+            foreach (float[] a in lots)
+            {
+                int n = 0;
+                foreach (float[] b in lots) if (Dist(a, b) < 200 * mpm) n++;
+                if (n > best) { best = n; core = a; }
+            }
+            List<float> ds = new List<float>();
+            foreach (float[] l in lots) ds.Add(Dist(l, core));
+            ds.Sort();
+            float med = Math.Max(50 * mpm, ds[ds.Count / 2]);
+            Func2 lotsNear = delegate (float x, float y, float r)
+            {
+                int n = 0; float rr = r * mpm;
+                foreach (float[] l in lots) if ((l[0] - x) * (l[0] - x) + (l[1] - y) * (l[1] - y) < (rr + l[2]) * (rr + l[2])) n++;
+                return n;
+            };
+            List<float[]> junctions = s.Junctions ?? new List<float[]>();
+            float km = 0;
+            foreach (List<float[]> road in s.Roads)
+                for (int k = 1; k < road.Count; k++) km += Dist(road[k - 1], road[k]) / mpm / 1000f;
+            float hand = s.DriveRight ? 1 : -1;
+            List<float[]> placed = new List<float[]>();
+
+            // welcome signs: where a road crosses 1.9 x the median lot distance going out of town, with no lot near
+            if (welcome.Count > 0)
+            {
+                List<float[]> spots = new List<float[]>(); // x, y, outward dx, dy, how far the road reaches out
+                foreach (List<float[]> road in s.Roads)
+                {
+                    float reach = 0;
+                    foreach (float[] p in road) reach = Math.Max(reach, Dist(p, core));
+                    for (int k = 1; k < road.Count; k++)
+                    {
+                        float r0 = Dist(road[k - 1], core) / med, r1 = Dist(road[k], core) / med;
+                        if ((r0 < 1.9f) == (r1 < 1.9f)) continue;
+                        float t = (1.9f - r0) / (r1 - r0), x = road[k - 1][0] + (road[k][0] - road[k - 1][0]) * t, y = road[k - 1][1] + (road[k][1] - road[k - 1][1]) * t;
+                        float l = Dist(road[k - 1], road[k]); if (l < 1e-3f || lotsNear(x, y, 100) > 0) continue;
+                        float sg = r1 > r0 ? 1 : -1; // outward along the road
+                        spots.Add(new[] { x, y, (road[k][0] - road[k - 1][0]) / l * sg, (road[k][1] - road[k - 1][1]) / l * sg, reach });
+                    }
+                }
+                spots.Sort(delegate (float[] a, float[] b) { return b[4].CompareTo(a[4]); }); // roads reaching furthest out first
+                int want = Math.Max(1, Math.Min(3, (int)Math.Round(km * 0.17f + 0.5f)));
+                foreach (float[] sp in spots)
+                {
+                    if (want == 0) break;
+                    if (NearAny(placed, sp, 200 * mpm)) continue;
+                    float[] d = { -sp[2], -sp[3] }; // traffic coming into town
+                    float[] rt = Right(d, hand);
+                    if (PutSign(m, scale, items, welcome, rng, hash, result, sp[0] + rt[0] * 7.8f * mpm, sp[1] + rt[1] * 7.8f * mpm, d, mpm, 8f))
+                    { placed.Add(new[] { sp[0], sp[1] }); want--; }
+                }
+            }
+            // neighbourhood signs: ~38 m along a road from a junction into a group of lots
+            if (nbhd.Count > 0)
+            {
+                int want = Math.Max(1, (int)Math.Round(km * 0.34f));
+                List<float[]> js = new List<float[]>(junctions);
+                for (int i = js.Count - 1; i > 0; i--) { int k = rng.Next(i + 1); float[] t = js[i]; js[i] = js[k]; js[k] = t; }
+                foreach (float[] j in js)
+                {
+                    if (want == 0) break;
+                    float rc = Dist(j, core) / med;
+                    if (rc < 0.7f || rc > 1.6f || NearAny(placed, j, 250 * mpm)) continue;
+                    float[] bestU = null; int most = 2;
+                    foreach (float[] u in RoadsLeaving(s.Roads, j, 15 * mpm))
+                    {
+                        int n = lotsNear(j[0] + u[0] * 80 * mpm, j[1] + u[1] * 80 * mpm, 100);
+                        if (n > most) { most = n; bestU = u; }
+                    }
+                    if (bestU == null) continue;
+                    float[] d = { -bestU[0], -bestU[1] }; // facing traffic heading out to the junction, read on the way in
+                    float[] rt = Right(d, hand);
+                    float px = j[0] + bestU[0] * 38 * mpm + rt[0] * 8.5f * mpm, py = j[1] + bestU[1] * 38 * mpm + rt[1] * 8.5f * mpm;
+                    if (lotsNear(px, py, 3) > 0) continue;
+                    if (PutSign(m, scale, items, nbhd, rng, hash, result, px, py, d, mpm, 8f)) { placed.Add(new[] { j[0], j[1] }); want--; }
+                }
+            }
+            // billboards along roads round the town, off the lots
+            if (bill.Count > 0)
+            {
+                int want = Math.Max(1, (int)Math.Round(km * 1.1f)), tries = 0, maxTries = 80 * want;
+                List<float[]> boards = new List<float[]>();
+                while (want > 0 && tries++ < maxTries)
+                {
+                    List<float[]> road = s.Roads[rng.Next(s.Roads.Count)];
+                    if (road.Count < 2) continue;
+                    int k = 1 + rng.Next(road.Count - 1);
+                    float len = Dist(road[k - 1], road[k]); if (len < 1e-3f) continue;
+                    float t = (float)rng.NextDouble(), x = road[k - 1][0] + (road[k][0] - road[k - 1][0]) * t, y = road[k - 1][1] + (road[k][1] - road[k - 1][1]) * t;
+                    float rc = Dist(new[] { x, y }, core) / med;
+                    if (rc < 0.6f || rc > 1.3f || NearAny(junctions, new[] { x, y }, 15 * mpm) || NearAny(boards, new[] { x, y }, 120 * mpm)) continue;
+                    float sg = rng.Next(2) == 0 ? 1 : -1;
+                    float[] d = { (road[k][0] - road[k - 1][0]) / len * sg, (road[k][1] - road[k - 1][1]) / len * sg };
+                    float[] rt = Right(d, rng.NextDouble() < 0.67 ? hand : -hand);
+                    float off = (9 + 7 * (float)rng.NextDouble()) * mpm, px = x + rt[0] * off, py = y + rt[1] * off;
+                    if (lotsNear(px, py, 6) > 0) continue;
+                    if (PutSign(m, scale, items, bill, rng, hash, result, px, py, d, mpm, 10f)) { boards.Add(new[] { x, y }); want--; }
+                }
+            }
+        }
+
+        private delegate int Func2(float x, float y, float r);
+
+        /// <summary>Unit directions of the roads leaving junction j (from road ends within 'reach'), measured ~10 m along.</summary>
+        private static List<float[]> RoadsLeaving(List<List<float[]>> roads, float[] j, float reach)
+        {
+            List<float[]> ways = new List<float[]>();
+            foreach (List<float[]> r in roads)
+                for (int e = 0; e < 2; e++)
+                {
+                    float[] end = e == 0 ? r[0] : r[r.Count - 1];
+                    if (Dist(end, j) > reach || r.Count < 2) continue;
+                    float[] far = e == 0 ? r[Math.Min(2, r.Count - 1)] : r[Math.Max(0, r.Count - 3)];
+                    float l = Dist(far, j); if (l < 1e-3f) continue;
+                    float[] u = { (far[0] - j[0]) / l, (far[1] - j[1]) / l };
+                    bool same = false;
+                    foreach (float[] w in ways) if (w[0] * u[0] + w[1] * u[1] > 0.94f) same = true; // the same road split in pieces
+                    if (!same) ways.Add(u);
+                }
+            return ways;
+        }
+
+        /// <summary>Whether another road starts or ends at this road's end (a joint, not a dead end).</summary>
+        private static bool EndJoined(List<List<float[]>> roads, List<float[]> self, float[] tip, float reach)
+        {
+            foreach (List<float[]> r in roads)
+                if (r != self && (Dist(r[0], tip) < reach || Dist(r[r.Count - 1], tip) < reach)) return true;
+            return false;
+        }
+
+        private static float[] NearestLot(List<float[]> lots, float x, float y)
+        {
+            float[] best = null; float bd = float.MaxValue;
+            foreach (float[] l in lots) { float d = (l[0] - x) * (l[0] - x) + (l[1] - y) * (l[1] - y); if (d < bd) { bd = d; best = l; } }
+            return best;
+        }
+
+        /// <summary>A pair of drains at (x, y) on a road running along 'u': one at each kerb, 'off' m from the centre line,
+        /// facing across the road.</summary>
+        private static void Kerbs(Maps m, float scale, float mpm, SpatialHash hash, List<Placement> result, Random rng, int item, float x, float y, float[] u, float off)
+        {
+            for (int sd = -1; sd <= 1; sd += 2)
+            {
+                float px = x - u[1] * off * mpm * sd, py = y + u[0] * off * mpm * sd;
+                if (HardAt(m, px, py, scale) || BlockedEdge(m, px, py, scale) || NearBridge(m, px, py, scale) || hash.Near(px, py, 1.5f * mpm)) continue;
+                Add(result, hash, item, px, py, (float)Math.Atan2(u[1] * sd, -u[0] * sd), rng, 0.8f * mpm);
+            }
+        }
+
+        /// <summary>A run of 'n' split rails from 'start' along 'dir' (rails 6 m long, centres 6 m apart, each turned across
+        /// the run as EA's are), with a post at each end; laid only if every rail is on dry land, not steep, clear.</summary>
+        private static bool Fence(Maps m, float cell, float scale, float mpm, SpatialHash hash, List<Placement> result, Random rng, int rail, int post, float[] start, float[] dir, int n)
+        {
+            const float L = 6f;
+            float yaw = (float)Math.Atan2(dir[0], dir[1]) + (float)Math.PI / 2;
+            List<float[]> at = new List<float[]>();
+            for (int i = 0; i < n; i++)
+            {
+                float px = start[0] + dir[0] * (L / 2 + L * i) * mpm, py = start[1] + dir[1] * (L / 2 + L * i) * mpm;
+                int gx = (int)(px / scale), gy = (int)(py / scale);
+                if (gx < 0 || gy < 0 || gx >= m.Slope.W || gy >= m.Slope.H) return false;
+                if (HardAt(m, px, py, scale) || BlockedEdge(m, px, py, scale) || m.Blocked.D[gy * m.Blocked.W + gx] > 0.5f || m.Slope.D[gy * m.Slope.W + gx] > 15
+                    || (m.RoadDist != null && m.RoadDist.D[gy * m.RoadDist.W + gx] < 7) || hash.Near(px, py, 2.5f * mpm)) return false;
+                at.Add(new[] { px, py });
+            }
+            foreach (float[] p in at) Add(result, hash, rail, p[0], p[1], yaw, rng, 2.5f * mpm);
+            if (post >= 0)
+                for (int e = 0; e < 2; e++)
+                {
+                    float d = e == 0 ? 0 : L * n;
+                    Add(result, hash, post, start[0] + dir[0] * d * mpm, start[1] + dir[1] * d * mpm, yaw, rng, 0.5f * mpm);
+                }
             return true;
         }
 

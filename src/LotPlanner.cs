@@ -14,7 +14,6 @@ namespace CawPlus
         public int Width, Depth;   // width = frontage along the road, depth = back from it
         public bool Community;
         public string Kind;        // community lots: beach, fishing, park, pool, cemetery, civic, venue or other (LotKind)
-        public float Pad;          // pad height (m): the ground at the middle of its front edge
         public float Vx { get { return -Uz; } }
         public float Vz { get { return Ux; } }
         public float[] Centre { get { return new[] { X + Ux * Width / 2f + Vx * Depth / 2f, Z + Uz * Width / 2f + Vz * Depth / 2f }; } }
@@ -105,13 +104,13 @@ namespace CawPlus
     /// <summary>
     /// One kind of community lot in a world (tools/lottypes.py, from EA's lot names): how many, the median distance from
     /// the town core as a ratio of the median lot's (civic buildings 0.35-1.0, beaches 1-3.4: the coast is away from the
-    /// core), the median distance to water (m; -1 = the world has none) and the median area (m2).
+    /// core) and the median area (m2).
     /// </summary>
     internal sealed class LotKind
     {
         public string Name;
         public int Count;
-        public float CoreRatio = 1, WaterM = -1, Area = 1600;
+        public float CoreRatio = 1, Area = 1600;
 
         /// <summary>A beach lot's middle is at most this far from the water (m).</summary>
         public const float BeachReach = 60f;
@@ -119,7 +118,7 @@ namespace CawPlus
         /// <summary>The kinds in the order they are given out: those that need a place (water, the core) first.</summary>
         public static readonly string[] Order = { "beach", "fishing", "civic", "cemetery", "pool", "park", "venue", "other" };
 
-        /// <summary>'type:count:core ratio:water m:area m2;...' (worlds.txt column 41); null if empty.</summary>
+        /// <summary>'type:count:core ratio:water m:area m2;...' (worlds.txt column 41; water m is not used); null if empty.</summary>
         public static List<LotKind> Parse(string s)
         {
             if (string.IsNullOrEmpty(s)) return null;
@@ -131,7 +130,7 @@ namespace CawPlus
                 if (f.Length < 5) continue;
                 LotKind k = new LotKind();
                 k.Name = f[0].Trim(); k.Count = int.Parse(f[1], ic); k.CoreRatio = float.Parse(f[2], ic);
-                k.WaterM = float.Parse(f[3], ic); k.Area = float.Parse(f[4], ic);
+                k.Area = float.Parse(f[4], ic); // f[3]: median distance to water, not used
                 l.Add(k);
             }
             return l.Count > 0 ? l : null;
@@ -144,16 +143,16 @@ namespace CawPlus
             List<LotKind> l = new List<LotKind>();
             foreach (string n in Order)
             {
-                List<float> core = new List<float>(), water = new List<float>(), area = new List<float>();
+                List<float> core = new List<float>(), area = new List<float>();
                 int count = 0;
                 foreach (List<LotKind> w in all)
                     foreach (LotKind k in w)
-                        if (k.Name == n) { count += k.Count; core.Add(k.CoreRatio); if (k.WaterM >= 0) water.Add(k.WaterM); area.Add(k.Area); }
+                        if (k.Name == n) { count += k.Count; core.Add(k.CoreRatio); area.Add(k.Area); }
                 if (count == 0) continue;
-                core.Sort(); water.Sort(); area.Sort();
+                core.Sort(); area.Sort();
                 LotKind t = new LotKind();
                 t.Name = n; t.Count = count; t.CoreRatio = core[core.Count / 2];
-                t.WaterM = water.Count > 0 ? water[water.Count / 2] : -1; t.Area = area[area.Count / 2];
+                t.Area = area[area.Count / 2];
                 l.Add(t);
             }
             return l;
@@ -299,7 +298,8 @@ namespace CawPlus
             return (int)Math.Round(t.Count * Math.Max(0.6f, Math.Min(1.3f, ours / Math.Max(1f, theirs))));
         }
 
-        public static List<PlannedLot> Place(Grid h, float cell, RoadNet net, float sea, LotTargets t, int want, int seed, bool roadsOnly = false, TownShape shape = null)
+        public static List<PlannedLot> Place(Grid h, float cell, RoadNet net, float sea, LotTargets t, int want, int seed, bool roadsOnly = false, TownShape shape = null,
+                                             float largest = 0)
         {
             List<PlannedLot> lots = new List<PlannedLot>();
             if (t == null || want <= 0 || net.Roads.Count == 0) return lots;
@@ -409,6 +409,7 @@ namespace CawPlus
             // 2. more than the world has on its roads: thin, the far-out roads first (EA's lots gather in town but reach
             // out along the roads; 6-31 per km)
             int onRoad = onRoadWant - keepBeach.Count;
+            List<PlannedLot> pool = new List<PlannedLot>(lots);
             if (lots.Count > onRoad && shape != null) lots = Spread(lots, roadOf, onRoad, shape, centre, rng, keepBeach);
             else if (lots.Count > onRoad)
             {
@@ -426,11 +427,20 @@ namespace CawPlus
             lots.AddRange(keepBeach);
             // 3. lots off the roads (Isla Paradiso's islets, Shang Simla's and Al Simhara's hillside lots reached on foot):
             // the world's off-road share, on land at least 15 m from a road, near the town's other lots, facing downhill
-            int offRoad = roadsOnly ? 0 : want - lots.Count;
+            int offRoad = want - lots.Count;
             if (roadsOnly) offRoad = 0;
             else if (t.OnRoad < 0.8f) offRoad = Math.Max(offRoad, (int)Math.Round(want * (1 - t.OnRoad)));
             else offRoad = (int)Math.Round(want * (1 - t.OnRoad)) + Math.Max(0, onRoad - lots.Count) / 4;
             if (offRoad > 0) OffRoad(h, cell, world, sea, t, bag, ref next, offRoad, maxRise, hash, lots, centre, rng, shape);
+            // space between neighbourhoods, after the lots off the roads (they are put near the others and joined them up)
+            if (shape != null)
+            {
+                List<PlannedLot> fixedLots = new List<PlannedLot>(keepBeach);
+                foreach (PlannedLot l in lots) if (!pool.Contains(l) && !fixedLots.Contains(l)) pool.Add(l);
+                foreach (PlannedLot l in keepBeach) lots.Remove(l);
+                Separate(lots, pool, fixedLots, largest, centre);
+                lots.AddRange(keepBeach);
+            }
             // community lots: by kind where the world's are known (beaches by the water, civic buildings in town...),
             // else the largest, as EA's parks, beaches and shops are
             int community = (int)Math.Round(lots.Count * share);
@@ -498,6 +508,96 @@ namespace CawPlus
             left.Sort(delegate (PlannedLot a, PlannedLot b) { return Dist(a.Centre, centre).CompareTo(Dist(b.Centre, centre)); });
             for (int k = 0; k < left.Count && keep.Count < count; k++) keep.Add(left[k]);
             return keep;
+        }
+
+        /// <summary>
+        /// Space between neighbourhoods (the tester: "like the EA ones"). EA's lots, grouped as lots within 40 m of each other,
+        /// form one main neighbourhood of 40-73 % of the lots (Sunset Valley 70 %, Appaloosa Plains 57 %, Twinbrook 43 %;
+        /// tools/roadlearn/hoodgaps.py) and smaller ones 47-120 m away; ours ran on as one (80-83 %). The main one is the
+        /// world's share of the lots nearest the centre; the lots of the same run within 40 m of it are taken out (up to
+        /// 30 % of the lots), row by row, until the rest stands apart; as many are then put back from the unused candidates
+        /// at least 40 m from it, next to the outer neighbourhoods first, so the count stays. 'fixedLots' (beaches) stay.
+        /// Only for worlds whose main neighbourhood holds at least half the lots: where EA's are already many small ones
+        /// (Champs Les Sims, Isla Paradiso, Barnacle Bay: 16-43 %) splitting ours cost 1-3 points of road score.
+        /// </summary>
+        private static void Separate(List<PlannedLot> keep, List<PlannedLot> pool, List<PlannedLot> fixedLots, float largest, float[] centre)
+        {
+            if (largest < 0.5f || largest >= 0.9f || keep.Count < 12 || Environment.GetEnvironmentVariable("CAWNOSEP") != null) return;
+            const float link = 40f;
+            int n0 = keep.Count + fixedLots.Count;
+            List<PlannedLot> all = new List<PlannedLot>(keep); all.AddRange(fixedLots);
+            List<int> big = Biggest(all, link);
+            if (big.Count <= (largest + 0.05f) * n0) return;
+            big.Sort(delegate (int a, int b) { return Dist(all[a].Centre, centre).CompareTo(Dist(all[b].Centre, centre)); });
+            int coreN = Math.Max(3, (int)Math.Round(largest * n0));
+            List<PlannedLot> core = new List<PlannedLot>();
+            for (int k = 0; k < coreN && k < big.Count; k++) core.Add(all[big[k]]);
+            int removed = 0;
+            for (int round = 0; round < 8; round++)
+            {
+                all = new List<PlannedLot>(keep); all.AddRange(fixedLots);
+                big = Biggest(all, link);
+                if (big.Count <= core.Count + 2) break;
+                List<PlannedLot> cut = new List<PlannedLot>();
+                foreach (int i in big)
+                {
+                    PlannedLot l = all[i];
+                    if (core.Contains(l) || fixedLots.Contains(l)) continue;
+                    if (GapTo(l, core) < link) cut.Add(l);
+                }
+                if (cut.Count == 0 || removed + cut.Count > 0.3f * n0) break;
+                foreach (PlannedLot l in cut) keep.Remove(l);
+                removed += cut.Count;
+            }
+            // put as many back, away from the main neighbourhood, next to the outer ones first
+            List<KeyValuePair<PlannedLot, float>> spare = new List<KeyValuePair<PlannedLot, float>>();
+            foreach (PlannedLot l in pool)
+            {
+                if (keep.Contains(l) || fixedLots.Contains(l) || GapTo(l, core) < link) continue;
+                float near = float.MaxValue;
+                foreach (PlannedLot o in keep) if (!core.Contains(o)) near = Math.Min(near, Dist(l.Centre, o.Centre));
+                spare.Add(new KeyValuePair<PlannedLot, float>(l, near + Dist(l.Centre, centre) * 0.05f));
+            }
+            spare.Sort(delegate (KeyValuePair<PlannedLot, float> a, KeyValuePair<PlannedLot, float> b) { return a.Value.CompareTo(b.Value); });
+            for (int k = 0; k < spare.Count && removed > 0; k++)
+            {
+                // a lot put back may join one already put back to the core: check against the core again
+                if (GapTo(spare[k].Key, core) < link) continue;
+                keep.Add(spare[k].Key); removed--;
+            }
+        }
+
+        /// <summary>The largest group of lots within 'link' m of each other (outline to outline, by half-diagonals).</summary>
+        private static List<int> Biggest(List<PlannedLot> lots, float link)
+        {
+            int n = lots.Count;
+            int[] par = new int[n];
+            for (int k = 0; k < n; k++) par[k] = k;
+            for (int a = 0; a < n; a++)
+                for (int b = a + 1; b < n; b++)
+                    if (Gap(lots[a], lots[b]) < link) { int ra = Root(par, a), rb = Root(par, b); if (ra != rb) par[ra] = rb; }
+            Dictionary<int, List<int>> g = new Dictionary<int, List<int>>();
+            List<int> best = new List<int>();
+            for (int k = 0; k < n; k++)
+            {
+                int r = Root(par, k); List<int> l;
+                if (!g.TryGetValue(r, out l)) g[r] = l = new List<int>();
+                l.Add(k);
+                if (l.Count > best.Count) best = l;
+            }
+            return best;
+        }
+
+        private static float Gap(PlannedLot a, PlannedLot b)
+        {
+            return Dist(a.Centre, b.Centre) - (float)Math.Sqrt(Sq(a.Width) + Sq(a.Depth)) / 2f - (float)Math.Sqrt(Sq(b.Width) + Sq(b.Depth)) / 2f;
+        }
+
+        private static float GapTo(PlannedLot l, List<PlannedLot> group)
+        {
+            float d = float.MaxValue;
+            foreach (PlannedLot o in group) if (o != l) d = Math.Min(d, Gap(l, o));
+            return d;
         }
 
         /// <summary>A lot fronting the road at distance s along it on one side, or null if it doesn't fit there.</summary>
@@ -657,7 +757,6 @@ namespace CawPlus
                 if (Overlap(x0, z0, ux, uz, f, dep, o)) return null;
             PlannedLot lot = new PlannedLot();
             lot.X = x0; lot.Z = z0; lot.Ux = ux; lot.Uz = uz; lot.Width = (int)f; lot.Depth = (int)dep;
-            lot.Pad = TerrainGen.Sample(h, (x0 + ux * f / 2) / cell, (z0 + uz * f / 2) / cell);
             return lot;
         }
 
@@ -684,16 +783,17 @@ namespace CawPlus
             return new[] { new[] { x0, z0 }, new[] { x0 + ux * w, z0 + uz * w }, new[] { x0 + ux * w + vx * d, z0 + uz * w + vz * d }, new[] { x0 + vx * d, z0 + vz * d } };
         }
 
+        public static int KeptOffRoad; // lots kept away from any road in the last SnapToRoads
+
         /// <summary>
         /// Fits lots to the roads CAW actually built (the tester, 2026-10-24: lots weren't lined up with their road). Each
         /// lot (four corners, world x/z; corner 0 -> 1 is the front edge, 0 -> 3 points away from the road) is turned to
         /// the built road nearest its front, its front edge put parallel to it at 'setback' metres from the centre line,
-        /// and kept only where the built road runs straight (within 0.5 m of a line) along the whole frontage and 3 m
+        /// and kept only where the built road runs straight (within 1 m of a line) along the whole frontage and 1 m
         /// beyond each side. If not straight where planned, it slides along the road up to 24 m to find a straight
         /// stretch; else it is dropped. Lots that would overlap one already placed are dropped too.
         /// roads: each built road piece as its Bezier knots (x0, z0 .. x3, z3). Returns the fitted lots (null = dropped).
         /// </summary>
-        public static int KeptOffRoad; // lots kept away from any road in the last SnapToRoads
         public static float[][][] SnapToRoads(List<float[][]> lots, List<float[]> roads, float setback, out int moved, out int dropped)
         {
             moved = dropped = 0; KeptOffRoad = 0;
@@ -901,7 +1001,7 @@ namespace CawPlus
 
         /// <summary>Metres a fitted lot keeps from any built road's centre line (CAW's road and pavement reach ~5 m; the front
         /// edge itself is at the 6 m setback).</summary>
-        public static float BuiltRoadClear = 5f;
+        private const float BuiltRoadClear = 5f;
 
         /// <summary>Whether a road segment (x1, z1, x2, z2, ...) comes within 'clear' m of the rectangle (corners in order).</summary>
         private static bool RoadWithin(List<float[]> seg, float[][] r, float clear)
@@ -957,6 +1057,126 @@ namespace CawPlus
         private static float Sq(float v) { return v * v; }
 
         /// <summary>
+        /// Each neighbourhood on its own shelf (the tester: different neighbourhoods at different heights, as Sunset Valley and
+        /// Appaloosa Plains). EA's neighbourhoods (lots within 40 m of each other) stand a median 25 m apart in level from
+        /// the nearest other one in Sunset Valley, 12.5 m in Appaloosa Plains, 9.6 m in Twinbrook (tools/roadlearn/hoodgaps.py;
+        /// ours were 0.4-1.4 m). The neighbourhood nearest the centre keeps its level; each other one, working outwards, stands 'step'
+        /// metres (x0.6-1.2) above the nearest one already set, but never lower than its own ground already is, so hillside ones keep
+        /// theirs. The land under it and round it is lifted
+        /// by that much, easing out over 140-420 m (a broad rise that keeps the ground's own bumps, not a mesa). Run before the ground is smoothed under
+        /// the roads (which then climb from shelf to shelf) and before the lot pads are levelled. Returns how many shelves.
+        /// </summary>
+        public static int HoodShelves(Grid g, float cell, List<PlannedLot> lots, float sea, float[] centre, float step, int seed)
+        {
+            if (lots.Count < 6 || step < 1 || centre == null) return 0;
+            int n = lots.Count;
+            float[][] c = new float[n][]; float[] rad = new float[n];
+            for (int k = 0; k < n; k++) { c[k] = lots[k].Centre; rad[k] = (float)Math.Sqrt(Sq(lots[k].Width) + Sq(lots[k].Depth)) / 2f; }
+            // neighbourhoods: lots within 40 m of each other (outline to outline, approximated by their half-diagonals)
+            int[] par = new int[n];
+            for (int k = 0; k < n; k++) par[k] = k;
+            for (int a = 0; a < n; a++)
+                for (int b = a + 1; b < n; b++)
+                    if (Math.Sqrt(Sq(c[a][0] - c[b][0]) + Sq(c[a][1] - c[b][1])) < rad[a] + rad[b] + 40)
+                    { int ra = Root(par, a), rb = Root(par, b); if (ra != rb) par[ra] = rb; }
+            Dictionary<int, List<int>> groups = new Dictionary<int, List<int>>();
+            for (int k = 0; k < n; k++) { int r = Root(par, k); List<int> l; if (!groups.TryGetValue(r, out l)) groups[r] = l = new List<int>(); l.Add(k); }
+            List<List<int>> G = new List<List<int>>();
+            foreach (List<int> l in groups.Values) if (l.Count >= 3) G.Add(l);
+            if (G.Count < 2) return 0;
+            // each one's own ground level and distance from the centre
+            float[] level = new float[G.Count], dist = new float[G.Count];
+            for (int q = 0; q < G.Count; q++)
+            {
+                List<float> hs = new List<float>(); float dmin = float.MaxValue;
+                foreach (int k in G[q])
+                {
+                    hs.Add(TerrainGen.Sample(g, c[k][0] / cell, c[k][1] / cell));
+                    dmin = Math.Min(dmin, (float)Math.Sqrt(Sq(c[k][0] - centre[0]) + Sq(c[k][1] - centre[1])));
+                }
+                hs.Sort(); level[q] = hs[hs.Count / 2]; dist[q] = dmin;
+            }
+            int core = 0;
+            for (int q = 1; q < G.Count; q++) if (dist[q] < dist[core]) core = q;
+            Random rng = new Random(seed * 3571 + 19);
+            float[] target = new float[G.Count];
+            // outward from the core: each one 'step' (x0.6-1.2) above the nearest one already set, so neighbouring
+            // neighbourhoods differ by about the world's step (a rise per 250 m overshot: Sunset Valley 45 m vs EA 25)
+            int[] order = new int[G.Count];
+            for (int q = 0; q < G.Count; q++) order[q] = q;
+            Array.Sort((float[])dist.Clone(), order);
+            bool[] set = new bool[G.Count];
+            target[core] = level[core]; set[core] = true;
+            foreach (int q in order)
+            {
+                if (set[q]) continue;
+                int near = core; float best = float.MaxValue;
+                for (int o = 0; o < G.Count; o++)
+                {
+                    if (!set[o]) continue;
+                    float dd = float.MaxValue;
+                    foreach (int a in G[q]) foreach (int b in G[o]) dd = Math.Min(dd, Sq(c[a][0] - c[b][0]) + Sq(c[a][1] - c[b][1]));
+                    if (dd < best) { best = dd; near = o; }
+                }
+                float rise = step * (0.6f + 0.6f * (float)rng.NextDouble());
+                target[q] = Math.Max(level[q], target[near] + rise);
+                target[q] = Math.Max(target[q], sea + 1f);
+                set[q] = true;
+            }
+            // the lift: a broad rise of the land, not a mesa (a flat shelf with a bank round it drew round mounds). Per
+            // neighbourhood a weight, 1 over its lots and 12 m round them, easing to 0 over 'reach' (the further it rises,
+            // the further out: about 7 deg away from other neighbourhoods), its edge wandering with noise; the lift at a
+            // point is the mean of the neighbourhoods' rises weighted by w^4 (the core's is 0; the land beyond them all by (1-max w)^4), so between two neighbourhoods the
+            // land climbs from one level to the other, and the ground keeps its own bumps. Worked out on a grid of ~8 m
+            // cells and interpolated. The lot pads are levelled afterwards.
+            const float apron = 12f;
+            float[] reach = new float[G.Count], up = new float[G.Count];
+            for (int q = 0; q < G.Count; q++) { up[q] = target[q] - level[q]; reach[q] = Math.Min(420f, Math.Max(140f, up[q] / 0.12f + 60f)); }
+            TerrainGen.Perlin pn = new TerrainGen.Perlin(seed * 7919 + 5);
+            float step8 = Math.Max(cell, 8f);
+            int cw = (int)Math.Ceiling((g.W - 1) * cell / step8) + 1, ch = (int)Math.Ceiling((g.H - 1) * cell / step8) + 1;
+            float[] lift = new float[cw * ch];
+            for (int cz = 0; cz < ch; cz++)
+                for (int cx = 0; cx < cw; cx++)
+                {
+                    float px = cx * step8, pz = cz * step8, sw = 0, sl = 0, wmax = 0;
+                    float warp = 1 + 0.35f * pn.Fbm(px / 170f, pz / 170f, 3), shift = 20f * pn.Fbm(px / 60f + 31, pz / 60f + 7, 2);
+                    for (int q = 0; q < G.Count; q++)
+                    {
+                        float d = float.MaxValue;
+                        foreach (int k in G[q]) d = Math.Min(d, (float)Math.Sqrt(Sq(px - c[k][0]) + Sq(pz - c[k][1])) - rad[k] - apron);
+                        if (d > 0) d = Math.Max(0, d * warp + shift);
+                        if (d >= reach[q]) continue;
+                        float w = 1 - d / reach[q];
+                        w = w * w * (3 - 2 * w);
+                        wmax = Math.Max(wmax, w);
+                        float w4 = w * w * w * w; // the nearest neighbourhood keeps its own level (a plain mean diluted it)
+                        sw += w4; sl += w4 * up[q];
+                    }
+                    float wb = (1 - wmax) * (1 - wmax); wb *= wb; // the untouched land, beyond every neighbourhood's reach
+                    lift[cz * cw + cx] = sw > 0 ? sl / (sw + wb) : 0;
+                }
+            for (int z = 0; z < g.H; z++)
+                for (int x = 0; x < g.W; x++)
+                {
+                    int i = z * g.W + x;
+                    float h = g.D[i];
+                    if (h <= sea) continue; // water stays water
+                    float fx = x * cell / step8, fz = z * cell / step8;
+                    int ix = Math.Min(cw - 2, (int)fx), iz = Math.Min(ch - 2, (int)fz);
+                    float tx = fx - ix, tz = fz - iz;
+                    float l = (lift[iz * cw + ix] * (1 - tx) + lift[iz * cw + ix + 1] * tx) * (1 - tz)
+                            + (lift[(iz + 1) * cw + ix] * (1 - tx) + lift[(iz + 1) * cw + ix + 1] * tx) * tz;
+                    if (l <= 0) continue;
+                    // ease the lift in from the shore, so the coast keeps its line
+                    g.D[i] = h + l * Math.Min(1f, (h - sea) / 3f);
+                }
+            return G.Count;
+        }
+
+        private static int Root(int[] p, int a) { while (p[a] != a) { p[a] = p[p[a]]; a = p[a]; } return a; }
+
+        /// <summary>
         /// Levels each lot's pad to the ground at its front edge (the road's height there) and grades the ground round it
         /// back into the land: a bank no steeper than ~17 deg (0.3 m per m), eased in over the first 16 m and meeting the
         /// land with a rounded edge (soft clamp), so a hillside lot sits on a terrace that blends into its surroundings
@@ -965,8 +1185,6 @@ namespace CawPlus
         /// banks had clamped it to each lot's pad, so a road past lots at different heights went up in steps (#133).
         /// Other lots' pads and water are left alone.
         /// </summary>
-        public static void LevelPads(Grid g, float cell, List<PlannedLot> lots, float sea) { LevelPads(g, cell, lots, sea, null); }
-
         public static void LevelPads(Grid g, float cell, List<PlannedLot> lots, float sea, List<List<float[]>> roads)
         {
             const float slope = 0.3f, minBlend = 16f, maxBlend = 100f, soft = 1.5f;

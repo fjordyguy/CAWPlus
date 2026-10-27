@@ -38,8 +38,6 @@ namespace CawPlus
             return t < 0 ? 0 : (t > 1 ? 1 : t);
         }
 
-        // ---------- Gaussian blur (3 box passes, O(n) regardless of sigma) ----------
-
         /// <summary>Bilinear value at fractional cell (x, y), clamped to the grid.</summary>
         public float At(float x, float y)
         {
@@ -49,6 +47,8 @@ namespace CawPlus
             float a = D[i] + (D[i + 1] - D[i]) * fx, b = D[i + W] + (D[i + W + 1] - D[i + W]) * fx;
             return a + (b - a) * fy;
         }
+
+        // ---------- Gaussian blur (3 box passes, O(n) regardless of sigma) ----------
 
         public Grid Blur(float sigma)
         {
@@ -111,14 +111,6 @@ namespace CawPlus
         public static int Clampi(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
         // ---------- smooth value noise ----------
-
-        /// <summary>Smooth random field in 0..1 with features roughly 'cell' pixels across.</summary>
-        public static Grid ValueNoise(int w, int h, float cell, Random rng)
-        {
-            Grid g = new Grid(w, h);
-            AddValueNoise(g, cell, 1f, rng);
-            return g;
-        }
 
         /// <summary>Adds amp x value noise to g in place (no full-size temporary: at 2048 m each one is 16 MB, and CAW's
         /// 32-bit process ran out of room for them, the tester's 2026-10-24 test).</summary>

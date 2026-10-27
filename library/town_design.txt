@@ -1,0 +1,22 @@
+# the town designer's settings per EA world (tools/roadlearn/towndesign.py): key|run m|dead-end m|crossroads share|round-the-town share|ring radius m|90 % lot distance m|neighbourhood level step m (tools/roadlearn/hoodgaps.py: median level difference to the nearest neighbourhood)|largest neighbourhood share of lots (hoodgaps.py: lots within 40 m of each other)
+al_simhara|151.2|284.5|0.143|0.26|585.8|763.6|0.6|0.4
+appaloosa_plains|48.0|70.5|0.56|0.367|379.7|464.0|12.5|0.57
+aurora_skies|70.3|111.1|0.5|0.403|371.9|548.8|0.0|1.0
+barnacle_bay|141.4|97.2|0.158|0.352|501.7|645.0|3.3|0.43
+bridgeport|43.0|50.2|0.385|0.381|391.5|767.7|17.0|0.7
+champs_les_sims|64.0|54.3|0.35|0.342|260.3|442.7|2.5|0.43
+dragon_valley|60.2|135.4|0.423|0.362|332.1|554.8|0.0|0.55
+hidden_springs|64.6|45.0|0.379|0.333|432.5|850.6|13.4|0.44
+isla_paradiso|47.9|51.1|0.065|0.432|430.4|970.9|13.1|0.16
+lucky_palms|37.5|40.0|0.179|0.327|464.9|766.3|0.0|0.68
+lunar_lakes|110.9|146.6|0.227|0.31|407.8|680.1|5.1|0.48
+midnight_hollow|40.0|285.6|0.636|0.147|269.2|577.4|9.5|0.62
+monte_vista|109.1|109.1|0.296|0.519|376.4|522.5|34.1|0.29
+oasis_landing|144.2|202.2|0.308|0.427|589.9|1064.2|46.0|0.34
+roaring_heights|60.0|31.5|0.4|0.401|359.6|429.4|0.0|0.63
+shang_simla|10.7|96.7|0.625|0.168|356.2|500.5|34.2|0.28
+sims_university|153.1|218.8|0.5|0.322|362.1|521.4|3.7|0.7
+starlight_shores|36.0|65.2|0.654|0.216|286.3|492.9|46.4|0.73
+sunlit_tides|168.3|118.0|0.333|0.349|686.5|938.0|4.2|0.12
+sunset_valley|70.8|45.4|0.222|0.279|307.3|483.7|25.2|0.7
+twinbrook|52.7|55.8|0.263|0.373|481.8|662.3|9.6|0.43

@@ -21,7 +21,6 @@ namespace CawPlus
         /// <summary>A texture a world's paint layers use: its resource key and name (no folder or extension).</summary>
         public sealed class Texture
         {
-            public uint Group;
             public ulong Instance;
             public string Name;
         }
@@ -38,7 +37,7 @@ namespace CawPlus
         {
             public sealed class Entry
             {
-                public uint Type, Group;
+                public uint Type;
                 public ulong Instance;
                 public long Offset;
                 public int FileSize, MemSize;
@@ -60,15 +59,15 @@ namespace CawPlus
                 byte[] idx = ReadAt(pos, (int)Math.Min(fs.Length - pos, 4 + 12 + (long)count * 32));
                 int p = 0;
                 uint flags = U32(idx, ref p);
-                uint cType = 0, cGroup = 0, cHi = 0;
+                uint cType = 0, cHi = 0;
                 if ((flags & 1) != 0) cType = U32(idx, ref p);
-                if ((flags & 2) != 0) cGroup = U32(idx, ref p);
+                if ((flags & 2) != 0) U32(idx, ref p); // constant group: skipped
                 if ((flags & 4) != 0) cHi = U32(idx, ref p);
                 for (int i = 0; i < count; i++)
                 {
                     Entry e = new Entry();
                     e.Type = (flags & 1) != 0 ? cType : U32(idx, ref p);
-                    e.Group = (flags & 2) != 0 ? cGroup : U32(idx, ref p);
+                    if ((flags & 2) == 0) U32(idx, ref p); // group: not needed
                     uint hi = (flags & 4) != 0 ? cHi : U32(idx, ref p);
                     uint lo = U32(idx, ref p);
                     e.Instance = ((ulong)hi << 32) | lo;
@@ -162,7 +161,6 @@ namespace CawPlus
                 for (int t = 0; t < count && o + 20 <= d.Length; t++)
                 {
                     Texture tx = new Texture();
-                    tx.Group = BitConverter.ToUInt32(d, o + 4);
                     tx.Instance = BitConverter.ToUInt64(d, o + 8);
                     int len = (int)BitConverter.ToUInt32(d, o + 16);
                     if (len < 0 || o + 20 + 2 * len > d.Length) break;

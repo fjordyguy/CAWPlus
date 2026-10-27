@@ -1,7 +1,6 @@
 using System;
 using System.IO;
 using System.Threading;
-using System.Windows.Forms;
 
 namespace CawPlus
 {
@@ -68,17 +67,6 @@ namespace CawPlus
             return g;
         }
 
-        /// <summary>The world's current heights as a grid of height-image vertices (W x H), from the paint-map samples.</summary>
-        public static Grid CurrentHeights(TerrainInfo ti, int W, int H)
-        {
-            Grid g = new Grid(W, H);
-            float sx = (float)ti.Heights.W / (W - 1), sy = (float)ti.Heights.H / (H - 1);
-            for (int y = 0; y < H; y++)
-                for (int x = 0; x < W; x++)
-                    g[x, y] = TerrainGen.Sample(ti.Heights, x * sx - 0.5f, y * sy - 0.5f);
-            return g;
-        }
-
         /// <summary>World (x, z) of height-image pixel (px, py).</summary>
         private static void PixelWorld(TerrainInfo ti, int W, int H, float px, float py, out float x, out float z)
         {
@@ -108,7 +96,7 @@ namespace CawPlus
             float[] origins = ti.Origin == 0 ? new[] { 0f, -ti.WorldSize / 2 } : new[] { ti.Origin, 0f };
             for (int attempt = 0; attempt < 4 && bestR < 0.98; attempt++)
             {
-                if (attempt > 0) { Application.DoEvents(); Thread.Sleep(400); Application.DoEvents(); }
+                if (attempt > 0) { Injector.Pump(); Thread.Sleep(400); Injector.Pump(); }
                 foreach (float o in origins)
                 for (int t = 0; t < 8; t++)
                 {

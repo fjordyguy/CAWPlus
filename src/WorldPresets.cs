@@ -6,7 +6,7 @@ using System.IO;
 namespace CawPlus
 {
     /// <summary>
-    /// "Like world" presets for Generate Terrain: terrain sliders plus town and road settings per Sims 3 world, from
+    /// "World type" presets (Generate Terrain, Generate Roads, Auto-Paint, Auto-Place, Spawners, Footpaths): terrain, road, lot and placement settings per Sims 3 world, from
     /// Library\worlds.txt (bundled) and Documents\CAWPlus\Library\worlds.txt (your own). "measured" presets were fitted to
     /// the world's heightmap; "approximate" ones are set from what the world is known for.
     /// </summary>
@@ -23,17 +23,20 @@ namespace CawPlus
         public float RoadKm;              // EA's road length; side streets fill the town up to it (optional 24th field)
         public float DeadEndShare = 0.4f; // EA's capped dead ends / junctions (optional 25th field)
         public float BuildSlope = 10;     // % slope still buildable (optional 26th field; EA land under its roads, p75)
+        public float RoadTop = 1;         // highest land (as a share of the land, by height) EA's roads reach, p98 (optional 42nd field); 1 = anywhere
         public float RiverWidth = 1;      // x the built-in river width (optional 27th field, tuned)
         public int Ponds;                 // ponds above the sea (optional 28th field; EA's 0x707CA200 count)
         public float PondRadius = 50;     // their typical radius in m (optional 29th field)
         public float SeaShare = -1, LakeShare = -1; // EA's sea and sea-level lake share of the map, % (optional 30th, 31st fields; measured)
         public RoadTargets RoadTargets;              // EA's town measured for the road checks (optional 32nd field)
-        public TownShape Town;
+        public TownShape Town;                       // EA's town shape: lot and road spread from the core, country roads (optional 38th field)
         public DowntownGrid Grid;                    // EA's downtown block grid and roads out of town (optional 39th field)
-        public RoadProfile Profile;                  // EA's road design profile (optional 40th field)                       // EA's town shape: lot and road spread from the core, country roads (optional 38th field)
-        public TerrainProfile Terrain;
+        public RoadProfile Profile;                  // EA's road design profile (optional 40th field)
+        public float[] TownDesign;                   // EA's town: run m, dead-end m, crossroads share, ring radius m, neighbourhood level step m,
+                                                     // largest neighbourhood's share of the lots (0 = not known) (library/town_design.txt)
+        public TerrainProfile Terrain;               // EA's terrain and water (library/<key>_terrain.json), for the terrain checks
         public LotTargets LotFigures;                // EA's lots: count, frontage, gaps, size mix (optional 34th-35th fields)
-        public float[] PathTargets;                  // EA's footpaths: km, distance from roads p10/p50/p90 m, piece median m (optional 33rd field)               // EA's terrain and water (library/<key>_terrain.json), for the terrain checks
+        public float[] PathTargets;                  // EA's footpaths: km, distance from roads p10/p50/p90 m, piece median m (optional 33rd field)
         public string Region = "";      // the real-world kind of place, for the road geography check (optional 37th field; src/RoadCharacter.cs)
         public RoadCharacter Character; // its targets (region + EA's measured library/<key>_roadgeo.json)
         public string Style = "";       // world type style: dissection, terraces, softness, town (optional 36th field; GenSettings.SetStyle)
@@ -51,6 +54,43 @@ namespace CawPlus
             if (string.IsNullOrEmpty(name)) return null;
             foreach (WorldPreset w in LoadAll()) if (string.Equals(w.Name, name, StringComparison.OrdinalIgnoreCase)) return w;
             return null;
+        }
+
+        /// <summary>Sets TownDesign on each preset from library/town_design.txt lines ("key|run|dead|cross|ring|ringr|lot90|step|largest");
+        /// worlds not measured (Riverview, Moonlight Falls: no lots) take the median of the others.</summary>
+        public static void ApplyTownDesign(List<WorldPreset> list, string[] lines)
+        {
+            Dictionary<string, float[]> byKey = new Dictionary<string, float[]>(StringComparer.OrdinalIgnoreCase);
+            List<float[]> all = new List<float[]>();
+            foreach (string raw in lines)
+            {
+                string l = raw.Trim();
+                if (l.Length == 0 || l[0] == '#') continue;
+                string[] p = l.Split('|');
+                if (p.Length < 6) continue;
+                try
+                {
+                    float[] v = { float.Parse(p[1], CultureInfo.InvariantCulture), float.Parse(p[2], CultureInfo.InvariantCulture),
+                                  float.Parse(p[3], CultureInfo.InvariantCulture), float.Parse(p[5], CultureInfo.InvariantCulture),
+                                  p.Length > 7 ? float.Parse(p[7], CultureInfo.InvariantCulture) : 0,
+                                  p.Length > 8 && p[8].Length > 0 ? float.Parse(p[8], CultureInfo.InvariantCulture) : 0 };
+                    byKey[p[0]] = v; all.Add(v);
+                }
+                catch (FormatException) { }
+            }
+            if (all.Count == 0) return;
+            float[] typical = new float[6];
+            for (int k = 0; k < 6; k++)
+            {
+                List<float> col = new List<float>();
+                foreach (float[] v in all) if (k < 5 || v[k] > 0) col.Add(v[k]);
+                col.Sort(); typical[k] = col.Count > 0 ? col[col.Count / 2] : 0;
+            }
+            foreach (WorldPreset w in list)
+            {
+                float[] v;
+                w.TownDesign = byKey.TryGetValue(Key(w.Name), out v) ? v : typical;
+            }
         }
 
         public static List<WorldPreset> LoadAll()
@@ -126,6 +166,10 @@ namespace CawPlus
             DowntownGrid typicalGrid = DowntownGrid.Typical(grids);
             if (typicalGrid != null) foreach (WorldPreset w in list) if (w.Grid == null) w.Grid = typicalGrid;
             List<RoadProfile> profiles = new List<RoadProfile>();
+            // the town designer's settings measured from each EA town (tools/roadlearn/towndesign.py), else the median town's
+            List<string> td = new List<string>();
+            foreach (KeyValuePair<string, string[]> e in Embedded.Files("town_design.txt")) td.AddRange(e.Value);
+            ApplyTownDesign(list, td.ToArray());
             foreach (WorldPreset w in list) if (w.Profile != null) profiles.Add(w.Profile);
             RoadProfile typicalProfile = RoadProfile.Typical(profiles);
             if (typicalProfile != null) foreach (WorldPreset w in list) if (w.Profile == null) w.Profile = typicalProfile;
@@ -158,7 +202,7 @@ namespace CawPlus
         }
 
         /// <summary>As above; with a coast (CoastType value, -1 = any) the main world is one with that coast if there is
-        /// one, else the coast is set on the blend (the user's coast choice stays when the seed changes).</summary>
+        /// one, else the chosen world's coast is overridden with it (the user's coast choice stays when the seed changes).</summary>
         public static WorldPreset Inspired(List<WorldPreset> all, int seed, int coast, out string label)
         {
             List<WorldPreset> ea = new List<WorldPreset>();
@@ -170,22 +214,21 @@ namespace CawPlus
             if (coast >= 0) foreach (WorldPreset w in ea) if ((int)w.Coast == coast) mains.Add(w);
             if (mains.Count == 0) mains = ea;
             // one world per map, no blending (the tester, 2026-10-24: a Sunlit Tides map shouldn't take Aurora Skies' hills)
-            WorldPreset a = mains[rng.Next(mains.Count)], b = a;
-            float t = 0;
+            WorldPreset a = mains[rng.Next(mains.Count)];
             WorldPreset m = Parse(a.Line);
             m.Name = a.Name; m.Source = "measured";
-            m.Mountains = L(a.Mountains, b.Mountains, t); m.Hills = L(a.Hills, b.Hills, t); m.Roughness = L(a.Roughness, b.Roughness, t);
-            m.Erosion = L(a.Erosion, b.Erosion, t); m.FlatLand = L(a.FlatLand, b.FlatLand, t);
-            m.Variety = L(a.Variety, b.Variety, t); m.Steepness = L(a.Steepness, b.Steepness, t);
-            m.DowntownBlocks = (int)Math.Round(L(a.DowntownBlocks, b.DowntownBlocks, t)); m.Neighbourhoods = (int)Math.Round(L(a.Neighbourhoods, b.Neighbourhoods, t));
-            m.Lots = (int)Math.Round(L(a.Lots, b.Lots, t)); m.EdgeRoads = (int)Math.Round(L(a.EdgeRoads, b.EdgeRoads, t));
+            m.Mountains = a.Mountains; m.Hills = a.Hills; m.Roughness = a.Roughness;
+            m.Erosion = a.Erosion; m.FlatLand = a.FlatLand;
+            m.Variety = a.Variety; m.Steepness = a.Steepness;
+            m.DowntownBlocks = a.DowntownBlocks; m.Neighbourhoods = a.Neighbourhoods;
+            m.Lots = a.Lots; m.EdgeRoads = a.EdgeRoads;
             m.Region = a.Region; m.Character = a.Character; // the main world's kind of place decides the road layout's character
             m.Style = a.Style; // the main world's own look (dissection, terraces, softness, town)
             m.RiverWidth = a.RiverWidth; m.Ponds = a.Ponds; m.PondRadius = a.PondRadius;
             m.RoadTargets = a.RoadTargets; m.Terrain = a.Terrain; m.PathTargets = a.PathTargets; m.LotFigures = a.LotFigures; m.Town = a.Town; m.Grid = a.Grid; m.Profile = a.Profile; // the checks follow the main world
-            m.ClimbCost = L(a.ClimbCost, b.ClimbCost, t); m.BuildSlope = L(a.BuildSlope, b.BuildSlope, t); m.DeadEndShare = L(a.DeadEndShare, b.DeadEndShare, t);
-            if (a.FootpathKm >= 0 && b.FootpathKm >= 0) m.FootpathKm = L(a.FootpathKm, b.FootpathKm, t);
-            if (a.RoadKm > 0 && b.RoadKm > 0) m.RoadKm = L(a.RoadKm, b.RoadKm, t);
+            m.ClimbCost = a.ClimbCost; m.BuildSlope = a.BuildSlope; m.DeadEndShare = a.DeadEndShare; m.RoadTop = a.RoadTop;
+            if (a.FootpathKm >= 0) m.FootpathKm = a.FootpathKm;
+            if (a.RoadKm > 0) m.RoadKm = a.RoadKm;
             m.Note = "Inspired by " + Short(a.Name) + ".";
             if (coast >= 0) m.Coast = (CoastType)coast;
             label = m.Note;
@@ -204,7 +247,6 @@ namespace CawPlus
         }
 
         public static string Short(string name) { int b = name.IndexOf(" ("); return b > 0 ? name.Substring(0, b) : name; }
-        private static float L(float a, float b, float t) { return a + (b - a) * t; }
 
         /// <summary>One worlds.txt line (see the header of library/worlds.txt).</summary>
         public static WorldPreset Parse(string line)
@@ -212,7 +254,7 @@ namespace CawPlus
             string[] p = line.Split('|');
             WorldPreset w = new WorldPreset();
             w.Line = line;
-            w.Name = p[0]; w.Source = p[1]; w.Coast = (CoastType)Enum.Parse(typeof(CoastType), p[2], true);
+            w.Name = p[0]; w.Source = p[1]; w.Coast = LibraryText.EnumOf<CoastType>(p[2], true);
             w.Mountains = F(p[3]); w.Hills = F(p[4]); w.Roughness = F(p[5]); w.Erosion = F(p[6]); w.FlatLand = F(p[7]);
             w.Water = F(p[8]); w.MaxHeight = F(p[9]); w.Rivers = (int)F(p[10]); w.DowntownBlocks = (int)F(p[11]);
             w.Neighbourhoods = (int)F(p[12]); w.Lots = (int)F(p[13]); w.EdgeRoads = (int)F(p[14]); w.Variety = F(p[15]);
@@ -243,6 +285,7 @@ namespace CawPlus
             if (p.Length > 37 && p[37].Trim().Length > 0) { try { w.Town = TownShape.Parse(p[37].Trim()); } catch (FormatException) { w.Town = null; } }
             if (p.Length > 38 && p[38].Trim().Length > 0) { try { w.Grid = DowntownGrid.Parse(p[38].Trim()); } catch (FormatException) { w.Grid = null; } }
             if (p.Length > 39 && p[39].Trim().Length > 0) { try { w.Profile = RoadProfile.Parse(p[39].Trim()); } catch (FormatException) { w.Profile = null; } }
+            if (p.Length > 41 && p[41].Trim().Length > 0) w.RoadTop = F(p[41]);
             if (p.Length > 40 && p[40].Trim().Length > 0 && w.LotFigures != null) { try { w.LotFigures.Kinds = LotKind.Parse(p[40].Trim()); } catch (FormatException) { w.LotFigures.Kinds = null; } }
             if (p.Length > 32 && p[32].Trim().Length > 0)
             {
@@ -254,5 +297,18 @@ namespace CawPlus
         }
 
         private static float F(string s) { return float.Parse(s.Trim(), CultureInfo.InvariantCulture); }
+    }
+
+    /// <summary>Reading values from the library files a user can override (worlds.txt, .props, .style).</summary>
+    internal static class LibraryText
+    {
+        /// <summary>An enum value by name; a number or unknown name is refused (Enum.Parse alone accepts any number, and an
+        /// out-of-range value later broke a drop-down: security review 2026-10-26).</summary>
+        public static T EnumOf<T>(string s, bool ignoreCase = false) where T : struct
+        {
+            object v = Enum.Parse(typeof(T), s.Trim(), ignoreCase);
+            if (!Enum.IsDefined(typeof(T), v)) throw new FormatException("unknown " + typeof(T).Name + ": " + s);
+            return (T)v;
+        }
     }
 }

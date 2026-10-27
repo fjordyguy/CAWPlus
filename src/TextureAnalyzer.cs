@@ -179,7 +179,7 @@ namespace CawPlus
                     // Layers should sit close to the base in tone so they blend; meadow grass most of all.
                     float dl = Math.Abs(f.Light - baseF.Light);
                     float dh = Math.Abs(f.Hue - baseF.Hue); if (dh > 180) dh = 360 - dh;
-                    if (r == PaintRole.Meadow) s += 0.6f * Band(dl, 0, 0.08f, 0.12f) * Band(dh, 0, 15, 25) - (baseF != null && dl < 0.01f && dh < 2 ? 0.4f : 0);
+                    if (r == PaintRole.Meadow) s += 0.6f * Band(dl, 0, 0.08f, 0.12f) * Band(dh, 0, 15, 25) - (dl < 0.01f && dh < 2 ? 0.4f : 0);
                     else s += 0.2f * Band(dl, 0, 0.2f, 0.2f);
                 }
             }

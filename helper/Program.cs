@@ -1,5 +1,8 @@
-// CAWPlusHelper: CAW Plus's terrain generator in a 64-bit .NET process (see CAWPlusHelper.csproj, src/HelperLink.cs).
+// CAWPlusHelper: CAW Plus's terrain generator, Auto-Paint and road planning in a 64-bit .NET process (see CAWPlusHelper.csproj, src/HelperLink.cs).
 //   CAWPlusHelper terrain <job folder>   reads job.txt, writes progress.txt, result.bin, checks.txt; exit code 0 = done
+//   CAWPlusHelper paint <job folder>     reads and writes PaintJob's files (paint_in.bin, job.txt, style.txt -> layer PNGs)
+//   CAWPlusHelper roads <job folder>     reads roads_in.bin + job.txt, writes roads_out.bin (plan and checks)
+//   CAWPlusHelper version                prints the .NET version and bitness
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -31,8 +34,9 @@ namespace CawPlus
             if (args.Length == 2 && args[0] == "terrain") return Terrain(args[1]);
             if (args.Length == 2 && args[0] == "paint") return Paint(args[1]);
             if (args.Length == 2 && args[0] == "roads") return Roads(args[1]);
+            if (args.Length == 2 && args[0] == "sketch") return Sketch(args[1]);
             if (args.Length == 1 && args[0] == "version") { Console.WriteLine("CAWPlusHelper on .NET " + Environment.Version + (Environment.Is64BitProcess ? ", 64-bit" : ", 32-bit")); return 0; }
-            Console.Error.WriteLine("usage: CAWPlusHelper terrain <job folder>");
+            Console.Error.WriteLine("usage: CAWPlusHelper terrain|paint|roads <job folder> | version");
             return 2;
         }
 
@@ -102,9 +106,32 @@ namespace CawPlus
             }
         }
 
+        /// <summary>The World Builder's land: sketch.txt (WorldSketch.ToText) built at the job's size.</summary>
+        private static int Sketch(string dir)
+        {
+            try
+            {
+                Stopwatch sw = Stopwatch.StartNew();
+                Dictionary<string, string> kv = HelperLink.ReadKeyValues(Path.Combine(dir, "job.txt"));
+                WorldSketch sk = WorldSketch.FromText(File.ReadAllText(Path.Combine(dir, "sketch.txt")));
+                if (sk == null) throw new InvalidDataException("not a World Builder sketch");
+                int size = int.Parse(kv["size"]);
+                TerrainGen.Result res = sk.Build(size, HelperLink.PF(kv["worldSize"]), HelperLink.PF(kv["sea"]), bool.Parse(kv["full"]));
+                HelperLink.WriteResult(Path.Combine(dir, "result.tmp"), res, sk.Seed);
+                File.Move(Path.Combine(dir, "result.tmp"), Path.Combine(dir, "result.bin"));
+                Log.Info(string.Format("sketch {0} x {0} squares at {1} px: {2:F1} s", sk.N, size, sw.Elapsed.TotalSeconds));
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                Log.Error("sketch job " + dir + " failed", ex);
+                Console.Error.WriteLine(ex.ToString());
+                return 1;
+            }
+        }
+
         private static int Terrain(string dir)
         {
-            string progressFile = Path.Combine(dir, "progress.txt");
             try
             {
                 Stopwatch sw = Stopwatch.StartNew();
@@ -117,10 +144,7 @@ namespace CawPlus
                 float water = HelperLink.PF(kv["water"]);
                 string key; kv.TryGetValue("target", out key);
                 TerrainProfile target = tries > 0 ? WorldPreset.FindTerrain(key) : null;
-                ProgressFn progress = delegate (string stage, int pct)
-                {
-                    try { File.WriteAllText(progressFile, pct + "|" + stage); } catch { }
-                };
+                ProgressFn progress = ProgressTo(dir);
                 TerrainChecks.Result checks = null;
                 TerrainGen.Result res = tries > 0 && target != null
                     ? TerrainGen.GenerateChecked(g, size, ws, full, progress, target, water, tries, out checks)

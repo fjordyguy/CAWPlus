@@ -64,15 +64,7 @@ namespace CawPlus
         /// <summary>
         /// Places 'counts[g]' spawners of each group, chosen from the selected items of that group (weighted).
         /// m: maps on the working grid (cell metres); scale = map pixels per working cell; occupied = (mapX, mapY, r).
-        /// </summary>
-        public static List<SpawnPlacement> Place(PlacementEngine.Maps m, float cell, float scale, List<PlaceItem> items, int[] counts,
-                                                 int seed, List<float[]> occupied)
-        {
-            return Place(m, cell, scale, items, counts, seed, occupied, null);
-        }
-
-        /// <summary>
-        /// As above; with a Like world, land spawners also keep to its distances from roads (EA's are a median
+        /// With a World type, land spawners also keep to its distances from roads (EA's are a median
         /// 33-108 m from a road, tools/placement.py) using m.RoadDist (PlacementEngine.RoadDistance).
         /// </summary>
         public static List<SpawnPlacement> Place(PlacementEngine.Maps m, float cell, float scale, List<PlaceItem> items, int[] counts,

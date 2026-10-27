@@ -289,7 +289,11 @@ namespace CawPlus
             pic.MouseEnter += delegate { if (chk3D.Checked && pic.FindForm() == Form.ActiveForm) pic.Focus(); };
             pic.MouseDown += OnDown;
             pic.MouseMove += OnMove;
-            pic.MouseUp += delegate { dragButton = MouseButtons.None; pic.Capture = false; settle.Stop(); settle.Start(); };
+            pic.MouseUp += delegate
+            {
+                if (painting) { painting = false; pic.Capture = false; EventHandler h = PaintDone; if (h != null) h(this, EventArgs.Empty); return; }
+                dragButton = MouseButtons.None; pic.Capture = false; settle.Stop(); settle.Start();
+            };
             pic.MouseWheel += OnWheel;
             pic.DoubleClick += delegate { if (!chk3D.Checked || heights == null) return; cam.Reset(world); Redraw(); };
             pic.Paint += OnPaint;
@@ -316,8 +320,6 @@ namespace CawPlus
             cam.Yaw += (float)(Math.PI / 2);
             if (chk3D.Checked) Redraw();
         }
-
-        public void Reset() { if (world > 0) cam.Reset(world); if (chk3D.Checked) Redraw(); }
 
         /// <summary>Shows the 2D map or a full-detail 3D frame.</summary>
         public void Redraw() { Draw(false); }
@@ -353,8 +355,25 @@ namespace CawPlus
             return new Rectangle((cs.Width - w) / 2, (cs.Height - hh) / 2, w, hh);
         }
 
+        /// <summary>Painting on the 2D map (the plan painter, #171): (u, v) = map position 0..1, 'first' on the mouse-down.</summary>
+        public delegate void PaintFn(float u, float v, bool first);
+        /// <summary>Called while the left button is held on the 2D map; null = no painting.</summary>
+        public PaintFn Painter;
+        /// <summary>Called when a painted stroke ends.</summary>
+        public event EventHandler PaintDone;
+        private bool painting;
+
+        private bool PaintAt(MouseEventArgs e, bool first)
+        {
+            if (chk3D.Checked || Painter == null || map == null) return false;
+            Rectangle r = DisplayRect();
+            Painter((e.X - r.X) / (float)r.Width, (e.Y - r.Y) / (float)r.Height, first);
+            return true;
+        }
+
         private void OnDown(object sender, MouseEventArgs e)
         {
+            if (e.Button == MouseButtons.Left && PaintAt(e, true)) { painting = true; pic.Capture = true; return; }
             if (!chk3D.Checked || heights == null) return;
             if (pic.FindForm() == Form.ActiveForm) pic.Focus();
             dragButton = e.Button; last = e.Location; pic.Capture = true;
@@ -362,6 +381,7 @@ namespace CawPlus
 
         private void OnMove(object sender, MouseEventArgs e)
         {
+            if (painting) { PaintAt(e, false); return; }
             if (dragButton == MouseButtons.None || !chk3D.Checked || heights == null) return;
             int dx = e.X - last.X, dy = e.Y - last.Y;
             if (dx == 0 && dy == 0) return;

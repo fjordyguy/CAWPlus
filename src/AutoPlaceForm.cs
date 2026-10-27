@@ -9,7 +9,8 @@ namespace CawPlus
     /// <summary>The Auto-Place panel: choose trees / bushes / rocks (or a biome), preview density, place them.</summary>
     public sealed class AutoPlaceForm : Form
     {
-        private CheckBox chkTrees, chkBushes, chkRocks, chkMatch, chkSigns, chkLights, chkOwnLayers, chkZones, chkCluster, chkWaterPlants, chkFalls;
+        private bool woodsOnlyInForest;
+        private CheckBox chkDetails, chkTownSigns, chkTrees, chkBushes, chkRocks, chkMatch, chkSigns, chkLights, chkOwnLayers, chkZones, chkCluster, chkWaterPlants, chkFalls;
         private List<WaterfallSite> fallSites = new List<WaterfallSite>(); // pond-step waterfall sites found on Read world (#158)
         private TrackBar tbLightSpacing, tbMax, tbEdge;
         private readonly List<List<float[]>> roadLines = new List<List<float[]>>(); // road centre lines, map coords
@@ -23,6 +24,7 @@ namespace CawPlus
         private TrackBar tbCover, tbDensity, tbBushes, tbRocks, tbRoad;
         private NumericUpDown nudSeed;
         private Button btnRead, btnPlace, btnRemove;
+        private bool placing, stopPlacing; // Place becomes Stop while placing (the tester: stop an accidental Place)
         private PictureBox picture;
         private ProgressBar progress;
         private Label status, counts, lblLayers;
@@ -31,6 +33,7 @@ namespace CawPlus
         private readonly List<PlaceItem> all = new List<PlaceItem>();
         private readonly List<PlaceItem> shown = new List<PlaceItem>();
         private TerrainInfo terrain;
+        private PlanMap painted;         // the plan painted in Generate Roads (#171), or null
         private Grid work; private int factor = 1; private float workCell;
         private readonly List<float[]> roadPts = new List<float[]>();  // map coords
         private readonly List<float[]> footPts = new List<float[]>();  // footpath centre lines, map coords
@@ -58,12 +61,12 @@ namespace CawPlus
             Text = "Auto-Place  (CAW Plus)";
             FormBorderStyle = FormBorderStyle.FixedToolWindow;
             StartPosition = FormStartPosition.CenterParent;
-            ClientSize = new Size(960, 860);
+            ClientSize = new Size(960, 884);
             ShowInTaskbar = false;
             Font = new Font("Segoe UI", 8.25f);
             int x = 10, y = 10, colW = 420;
 
-            GroupBox gbWhat = new GroupBox(); gbWhat.Text = "What to place"; gbWhat.SetBounds(x, y, colW, 374);
+            GroupBox gbWhat = new GroupBox(); gbWhat.Text = "What to place"; gbWhat.SetBounds(x, y, colW, 396);
             Label lr = new Label(); lr.Text = "World type"; lr.AutoSize = true; lr.Location = new Point(10, 22); gbWhat.Controls.Add(lr);
             cbRef = new ComboBox(); cbRef.DropDownStyle = ComboBoxStyle.DropDownList; cbRef.SetBounds(80, 18, 196, 20);
             cbRef.SelectedIndexChanged += delegate { ApplyReference(); RefreshSliderLabels(); };
@@ -118,6 +121,18 @@ namespace CawPlus
             new ToolTip().SetToolTip(chkWaterPlants, "Reeds, cattails and lilies (ticked under 'Water plants') in clumps along river and pond banks.\n" +
                 "Not along the open sea.");
             gbWhat.Controls.Add(chkWaterPlants);
+            chkDetails = new CheckBox(); chkDetails.Text = "Street details"; chkDetails.Checked = false; chkDetails.AutoSize = true; chkDetails.Location = new Point(240, 346);
+            chkDetails.CheckedChanged += delegate { SchedulePreview(); };
+            new ToolTip().SetToolTip(chkDetails, "Base-game road drains, manholes, fire hydrants and split-rail fences, placed as EA's worlds place them:\n" +
+                "drains at each kerb where roads meet in town, manholes in the lane and hydrants on the verge along roads lined with lots,\n" +
+                "fences in short runs beside country roads and out into the fields behind lots. They go in the 'Street Details' World Layer.");
+            gbWhat.Controls.Add(chkDetails);
+            chkTownSigns = new CheckBox(); chkTownSigns.Text = "Town signs and billboards"; chkTownSigns.Checked = false; chkTownSigns.AutoSize = true; chkTownSigns.Location = new Point(240, 368);
+            chkTownSigns.CheckedChanged += delegate { SchedulePreview(); };
+            new ToolTip().SetToolTip(chkTownSigns, "Base-game welcome signs, neighbourhood signs and billboards, placed as EA's worlds place them:\n" +
+                "welcome signs on the roads into town just past the last lots, facing incoming traffic; neighbourhood signs ~38 m in from a junction\n" +
+                "on the road into a group of houses; billboards 9-16 m off the roads round the town, never on a lot. They go in 'Street Details'.");
+            gbWhat.Controls.Add(chkTownSigns);
             chkFalls = new CheckBox(); chkFalls.Text = "Waterfalls at pond steps (test)"; chkFalls.Checked = false; chkFalls.AutoSize = true; chkFalls.Location = new Point(10, 346);
             chkFalls.CheckedChanged += delegate { SchedulePreview(); };
             new ToolTip().SetToolTip(chkFalls, "EA's waterfall effects where a raised pond spills over a cliff (a fall at the lip and a splash below).\n" +
@@ -126,7 +141,7 @@ namespace CawPlus
                 "EA waterfall, but it finds only about 1 in 7 of them. Not yet tried in CAW: use a copy of the world.");
             gbWhat.Controls.Add(chkFalls);
             Controls.Add(gbWhat);
-            y += 380;
+            y += 402;
 
             GroupBox gbHow = new GroupBox(); gbHow.Text = "Density"; gbHow.SetBounds(x, y, colW, 300);
             int ty = 18;
@@ -180,7 +195,7 @@ namespace CawPlus
 
             btnRead = new Button(); btnRead.Text = "Read world"; btnRead.SetBounds(x, y, 110, 28); btnRead.Click += delegate { ReadWorld(); };
             btnPlace = new Button(); btnPlace.Text = "Place"; btnPlace.SetBounds(x + 115, y, 110, 28); btnPlace.Font = new Font(Font, FontStyle.Bold);
-            btnPlace.Click += delegate { PlaceAll(); };
+            btnPlace.Click += delegate { if (placing) stopPlacing = true; else PlaceAll(); };
             btnRemove = new Button(); btnRemove.Text = "Remove last"; btnRemove.SetBounds(x + 230, y, 110, 28); btnRemove.Click += delegate { RemoveLast(); };
             Controls.Add(btnRead); Controls.Add(btnPlace); Controls.Add(btnRemove);
             y += 32;
@@ -202,7 +217,7 @@ namespace CawPlus
             Controls.Add(counts);
 
             RefreshLibraries(WorldPreset.Inspiration ?? "Sunset Valley"); // the EA world Generate Terrain modelled this map on, else EA's standard set
-            previewTimer = new Timer(); previewTimer.Interval = 400;
+            previewTimer = new Timer(); previewTimer.Interval = 250;
             previewTimer.Tick += delegate { previewTimer.Stop(); UpdatePreview(); };
             // scale with the screen's DPI (text was cut off on some displays)
             AutoScaleDimensions = new SizeF(96F, 96F);
@@ -211,7 +226,6 @@ namespace CawPlus
             Theme.Apply(this);
         }
 
-        /// <summary>Roughly how many trees per hectare of woodland a density value gives (9 m grid, fill 5-80%).</summary>
         /// <summary>Whether the sliders scale the World type's own densities (Match its density, with a World type).</summary>
         private bool Matching() { return chkMatch != null && chkMatch.Checked && cbRef != null && cbRef.SelectedItem is ObjectLibrary; }
 
@@ -237,6 +251,7 @@ namespace CawPlus
             for (int i = 0; i < sliderLabels.Count; i++) sliderLabels[i].Value.Text = sliderTexts[i](sliderLabels[i].Key.Value);
         }
 
+        /// <summary>Roughly how many trees per hectare of woodland a density value gives (9 m grid, fill 5-80%).</summary>
         private static string TreesPerHa(int v)
         {
             float fill = 0.05f + 0.75f * v / 100f;
@@ -259,6 +274,8 @@ namespace CawPlus
             tb.SetBounds(138, ty, 126, 28);
             Label val = new Label(); val.SetBounds(266, ty + 6, 150, 18); val.ForeColor = Color.DimGray; gb.Controls.Add(val);
             tb.ValueChanged += delegate { val.Text = text(tb.Value); if (tb == tbCover || tb == tbDensity) RefreshSliderLabels(); SchedulePreview(); };
+            // letting go of a slider redraws straight away (the tester: the picture only changed after a new seed)
+            tb.MouseUp += delegate { if (work != null && !busy) { previewTimer.Stop(); UpdatePreview(); } };
             val.Text = text(value);
             sliderLabels.Add(new KeyValuePair<TrackBar, Label>(tb, val)); sliderTexts.Add(text);
             gb.Controls.Add(tb);
@@ -294,6 +311,14 @@ namespace CawPlus
                 for (int i = 0; i < work.D.Length; i++) if (work.D[i] >= terrain.WaterLevel) landCells++; // ponds are small; sea level is what matters here
                 landHa = landCells * workCell * workCell / 10000f;
                 maps = null; plan = null; clearMap = null; // the old world's maps don't fit the new work grid
+                string wdir = Caw.WorldDir(Path.Combine(Log.Dir, "Worlds"), world);
+                painted = PlanMap.Load(Path.Combine(wdir, "plan.png"));
+                // a plan from the World Builder: its forest squares are where the woods go (#173), while the world still
+                // has the land the World Builder made
+                bool sketched = File.Exists(Path.Combine(wdir, "sketch.txt")), built = sketched && WorldSketch.AppliedTo(wdir, terrain.Heights);
+                if (sketched && !built) painted = null;
+                woodsOnlyInForest = painted != null && painted.Has(PlanArea.Forest) && built;
+                if (painted != null) Log.Info("Auto-Place: using the painted plan (forest, parks, keep-clear)" + (woodsOnlyInForest ? ", woods only in the World Builder's forest" : ""));
 
                 OnProgress("Reading roads and lots", 96);
                 roadPts.Clear(); roadLines.Clear();
@@ -329,10 +354,7 @@ namespace CawPlus
                 OnProgress("Reading the object catalog", 98);
                 all.Clear();
                 // EA's own objects by instance first (signs, streetlights, spawners, rocks, trees in the bundled worlds)
-                PlacementEngine.Known.Clear();
-                foreach (ObjectLibrary l in ObjectLibrary.LoadAll())
-                    foreach (RefObject r in l.Items)
-                        if (r.Instance != null && r.Instance.Length == 16 && !PlacementEngine.Known.ContainsKey(r.Instance)) PlacementEngine.Known[r.Instance] = r.Kind;
+                PlacementEngine.LoadKnown();
                 foreach (Caw.CatalogItem c in Caw.Catalog()) all.Add(PlacementEngine.Classify(c));
                 GuessLayers();
                 try
@@ -709,6 +731,29 @@ namespace CawPlus
             }
         }
 
+        private List<PlaceItem> details;
+
+        /// <summary>The base-game street details (PlacementEngine.DetailNames), from the catalog by instance, else by key.</summary>
+        private List<PlaceItem> DetailItems()
+        {
+            if (details != null) return details;
+            details = new List<PlaceItem>();
+            for (int k = 0; k < PlacementEngine.DetailIds.Length; k++)
+            {
+                string hex = PlacementEngine.DetailIds[k].ToString("x16");
+                Caw.CatalogItem ci = null;
+                foreach (PlaceItem p in all) if (p.Catalog != null && p.Catalog.InstanceHex == hex) { ci = p.Catalog; break; }
+                try { if (ci == null) ci = Caw.ObjectByInstance(PlacementEngine.DetailNames[k], PlacementEngine.DetailIds[k]); }
+                catch (Exception ex) { Log.Error("Street detail " + PlacementEngine.DetailNames[k] + " not found", ex); }
+                if (ci == null) continue;
+                PlaceItem it = new PlaceItem();
+                it.Catalog = ci; it.Name = PlacementEngine.DetailNames[k]; it.Kind = PlaceKind.Detail; it.Detail = PlacementEngine.DetailRoles[k]; it.Selected = true;
+                details.Add(it);
+            }
+            Log.Info("Street details: " + details.Count + " of " + PlacementEngine.DetailIds.Length + " objects found");
+            return details;
+        }
+
         private List<PlaceItem> ActiveItems()
         {
             List<PlaceItem> items = new List<PlaceItem>();
@@ -716,11 +761,13 @@ namespace CawPlus
             {
                 PlaceItem c = new PlaceItem();
                 c.Catalog = p.Catalog; c.Name = p.Name; c.Kind = p.Kind;
-                c.Conifer = p.Conifer; c.WaterLover = p.WaterLover; c.Lowland = p.Lowland;
+                c.Conifer = p.Conifer; c.WaterLover = p.WaterLover; c.Lowland = p.Lowland; c.Palm = p.Palm; c.RockSize = p.RockSize;
                 c.Ref = p.Ref; c.Weight = p.Weight; c.Indoor = p.Indoor; c.WaterPlant = p.WaterPlant; c.BuyPlant = p.BuyPlant;
                 c.Selected = p.Selected && !p.Indoor && (p.WaterPlant ? chkWaterPlants.Checked : KindOn(p.Kind));
                 items.Add(c);
             }
+            foreach (PlaceItem d in DetailItems())
+                if (PlacementEngine.IsTownSign(d.Detail) ? chkTownSigns.Checked : chkDetails.Checked) items.Add(d);
             return items;
         }
 
@@ -740,11 +787,12 @@ namespace CawPlus
             s.StreetlightSpacing = tbLightSpacing.Value;
             s.WaterPlants = chkWaterPlants.Checked; s.MaxObjects = tbMax.Value * 100;
             s.EdgeMargin = tbEdge.Value; s.DriveRight = cbSide == null || cbSide.SelectedIndex == 0;
-            s.Roads = roadLines; s.Junctions = junctions;
+            s.Roads = roadLines; s.Junctions = junctions; s.Lots = lots;
             s.Bridges = bridgeLines; s.MapW = terrain.MapW; s.MapH = terrain.MapH;
             float[] rp = RockPaint(s.Library);
             if (rp != null) s.TreeSlopeStart = PlacementEngine.RockStart(rp);
             s.AltitudeZones = chkZones.Checked;
+            if (painted != null) { s.PlanCodes = painted.Codes; s.PlanN = painted.N; s.WoodsOnlyInForest = woodsOnlyInForest; }
             return s;
         }
 
@@ -838,7 +886,7 @@ namespace CawPlus
                         bmp.SetPixel(x, y, Color.FromArgb(Clamp(c.R * shade), Clamp(c.G * shade), Clamp(c.B * shade)));
                     }
                 Color[] cols = { Color.FromArgb(25, 70, 25), Color.FromArgb(130, 180, 70), Color.FromArgb(170, 170, 170), Color.FromArgb(150, 60, 160),
-                                 Color.White, Color.FromArgb(230, 20, 20), Color.FromArgb(0, 110, 220), Color.FromArgb(150, 100, 50) };
+                                 Color.White, Color.FromArgb(230, 20, 20), Color.FromArgb(0, 110, 220), Color.FromArgb(150, 100, 50), Color.FromArgb(255, 170, 40) };
                 // roadside things last and larger, so they show on top
                 for (int pass = 0; pass < 2; pass++)
                     foreach (Placement p in plan)
@@ -994,8 +1042,10 @@ namespace CawPlus
                     "Auto-Place", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
 
             SetBusy(true);
+            placing = true; stopPlacing = false;
+            btnPlace.Text = "Stop"; btnPlace.Enabled = true;
             lastPlaced.Clear();
-            int failed = 0, trees = 0;
+            int failed = 0, trees = 0, stoppedAt = -1;
             DateTime t0 = DateTime.Now;
             Caw.ResetPlaceTiming();
             try
@@ -1020,9 +1070,11 @@ namespace CawPlus
                     catch (Exception ex) { if (failed < 5) Log.Error("Placing " + items[p.Item].Name + " failed", ex); }
                     if (o != null) { lastPlaced.Add(o); if (items[p.Item].Catalog.IsTree) trees++; } else failed++;
                     if (k == 9 && lastPlaced.Count == 0) { Status("The first 10 objects failed; stopped. See the log."); break; }
-                    if (k % 25 == 0) { OnProgress("Placing " + (k + 1) + " of " + plan.Count, 100 * k / plan.Count); Application.DoEvents(); }
+                    if (k % 10 == 0) { OnProgress("Placing " + (k + 1) + " of " + plan.Count + " (click Stop to stop)", 100 * k / plan.Count); Injector.Pump(); }
+                    if (stopPlacing) { stoppedAt = k + 1; break; }
                 }
-                int fallsPlaced = PlaceFalls(world, falls, ref failed);
+                int fallsPlaced = stoppedAt < 0 ? PlaceFalls(world, falls, ref failed) : 0;
+                if (stoppedAt >= 0) Log.Info("Auto-Place: stopped by the user after " + stoppedAt + " of " + plan.Count);
                 Log.Info(string.Format("Auto-Place: placed {0}, failed {1}, {2:F0} s", lastPlaced.Count, failed, (DateTime.Now - t0).TotalSeconds));
                 Log.Info("Auto-Place timing: " + Caw.PlaceTimingSummary());
                 foreach (KeyValuePair<string, int> kv in perLayer) Log.Info("  " + kv.Value + " into '" + kv.Key + "'");
@@ -1034,15 +1086,23 @@ namespace CawPlus
                     catch (Exception ex) { Log.Error("Cluster Trees failed", ex); clustered = " Clustering failed (see log); use CAW's Cluster Trees button."; }
                 }
                 if (lastPlaced.Count > 0) Injector.Done("objects");
-                Status("Placed " + lastPlaced.Count + " objects" + (fallsPlaced > 0 ? " incl. " + fallsPlaced + " waterfalls" : "") + (failed > 0 ? " (" + failed + " failed, see log)" : "") + "." + clustered);
+                Status((stoppedAt >= 0 ? "Stopped: placed " : "Placed ") + lastPlaced.Count + " objects" + (fallsPlaced > 0 ? " incl. " + fallsPlaced + " waterfalls" : "") + (failed > 0 ? " (" + failed + " failed, see log)" : "") + "." + clustered +
+                    (stoppedAt >= 0 ? " 'Remove last' takes these out again." : ""));
                 // they now count as existing, so a second run fills around them and the budget counts them
-                foreach (Placement p in plan)
+                for (int k = 0; k < plan.Count; k++)
                 {
+                    if (stoppedAt >= 0) break; // (a stopped run: only some were placed; 'Read world' counts them again)
+                    Placement p = plan[k];
                     occupied.Add(new[] { p.MapX, p.MapY, 2.5f / terrain.CellMeters });
                     Caw.WorldObject w = new Caw.WorldObject(); w.Name = items[p.Item].Name; existing.Add(w);
                 }
             }
-            catch (Exception ex) { Log.Error("Auto-Place failed", ex); Status("Placing failed: " + ex.Message); }
+            catch (Exception ex)
+            {
+                Log.Error("Auto-Place failed", ex); Status("Placing failed: " + ex.Message);
+                if (ex is WorldChangedException) lastPlaced.Clear(); // they belong to the other world: 'Remove last' mustn't touch them
+            }
+            placing = false; stopPlacing = false; btnPlace.Text = "Place";
             SetBusy(false);
         }
 
@@ -1127,6 +1187,7 @@ namespace CawPlus
                 case PlaceKind.Rock: role = NearWater(p) ? "WaterRocks" : "Rock"; break;
                 case PlaceKind.Sign: role = "Sign"; break;
                 case PlaceKind.Streetlight: role = "Streetlight"; break;
+                case PlaceKind.Detail: return "Street Details";
                 default: return "World Misc";
             }
             string l;
@@ -1186,7 +1247,7 @@ namespace CawPlus
             {
                 try { Caw.Delete(lastPlaced[i], removed > 0); removed++; }
                 catch (Exception ex) { if (removed < 3) Log.Error("Removing object failed", ex); }
-                if (i % 25 == 0) { OnProgress("Removing", 100 * (lastPlaced.Count - i) / lastPlaced.Count); Application.DoEvents(); }
+                if (i % 25 == 0) { OnProgress("Removing", 100 * (lastPlaced.Count - i) / lastPlaced.Count); Injector.Pump(); }
             }
             lastPlaced.Clear();
             SetBusy(false);

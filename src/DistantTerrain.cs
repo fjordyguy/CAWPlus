@@ -28,7 +28,7 @@ namespace CawPlus
         public static Result Read()
         {
             Result r = new Result();
-            Type rm = FindType("Sims3.CSHost.ResourceMgr"), keyType = FindType("Sims3.CSHost.ResourceKey");
+            Type rm = Caw.FindType("Sims3.CSHost.ResourceMgr"), keyType = Caw.FindType("Sims3.CSHost.ResourceKey");
             if (rm == null || keyType == null) { r.Note = "ResourceMgr not found"; return r; }
             MethodInfo find = rm.GetMethod("FindRecord", BindingFlags.Static | BindingFlags.Public, null, new[] { keyType }, null);
 
@@ -105,14 +105,14 @@ namespace CawPlus
         /// <summary>A resource from the game files CAW has loaded (null if not found).</summary>
         public static byte[] Resource(uint type, uint group, ulong instance)
         {
-            Type rm = FindType("Sims3.CSHost.ResourceMgr"), keyType = FindType("Sims3.CSHost.ResourceKey");
+            Type rm = Caw.FindType("Sims3.CSHost.ResourceMgr"), keyType = Caw.FindType("Sims3.CSHost.ResourceKey");
             if (rm == null || keyType == null) return null;
             MethodInfo find = rm.GetMethod("FindRecord", BindingFlags.Static | BindingFlags.Public, null, new[] { keyType }, null);
             return find == null ? null : Find(find, keyType, new ulong[] { type, group, instance });
         }
 
         /// <summary>The world's distant terrain objects (by instance or script name), for removing them.</summary>
-        public static List<object> Objects(string except)
+        public static List<object> Objects()
         {
             List<object> list = new List<object>();
             System.Collections.IEnumerable objs = Caw.Call(Caw.MainForm, "GetAllWorldObjects") as System.Collections.IEnumerable;
@@ -122,7 +122,6 @@ namespace CawPlus
                 string name = "", script = "";
                 try { name = Convert.ToString(Caw.GetProperty(o, "InstanceName")); } catch { }
                 try { script = Convert.ToString(Caw.GetProperty(o, "ScriptClassName")); } catch { }
-                if (except != null && name.IndexOf(except, StringComparison.OrdinalIgnoreCase) >= 0) continue;
                 if (name.IndexOf("distant", StringComparison.OrdinalIgnoreCase) >= 0 || script.IndexOf("distant", StringComparison.OrdinalIgnoreCase) >= 0) list.Add(o);
             }
             return list;
@@ -156,29 +155,28 @@ namespace CawPlus
             for (int ci = 0; ci < keys.Count; ci++)
             {
                 uint g = (uint)keys[ci][0]; ulong i = keys[ci][1];
-                Caw.CatalogItem c = new Caw.CatalogItem(); c.Name = names[ci];
                 DistantMaker.Template t = new DistantMaker.Template();
                 t.Objd = Resource(S3Pkg.OBJD, g, i); t.Objk = Resource(S3Pkg.OBJK, g, i);
-                if (t.Objd == null || t.Objk == null) { Log.Info("  distant terrain template '" + c.Name + "': definition not readable"); continue; }
+                if (t.Objd == null || t.Objk == null) { Log.Info("  distant terrain template '" + names[ci] + "': definition not readable"); continue; }
                 try
                 {
                     ulong[] vp = FirstTgi(t.Objk, 8 + BitConverter.ToInt32(t.Objk, 4), S3Pkg.VPXY);
                     if (vp == null) continue;
                     t.Vpxy = Resource((uint)vp[0], (uint)vp[1], vp[2]);
-                    if (t.Vpxy == null) { Log.Info("  distant terrain template '" + c.Name + "': proxy not readable"); continue; }
+                    if (t.Vpxy == null) { Log.Info("  distant terrain template '" + names[ci] + "': proxy not readable"); continue; }
                     int ext = (int)BitConverter.ToUInt32(t.Vpxy, 12);
                     int chunk = (int)BitConverter.ToUInt32(t.Vpxy, 20 + 16 * (1 + ext));
                     int tgi = chunk + 12 + BitConverter.ToInt32(t.Vpxy, chunk + 8);
                     ulong[] fp = FirstTgi(t.Vpxy, tgi, S3Pkg.FTPT), li = FirstTgi(t.Vpxy, tgi, S3Pkg.LITE);
                     if (fp != null) t.Ftpt = Resource((uint)fp[0], (uint)fp[1], fp[2]);
                     if (li != null) t.Lite = Resource((uint)li[0], (uint)li[1], li[2]);
-                    t.Source = c.Name + " (" + string.Format("{0:X8}:{1:X16}", g, i) + ")";
+                    t.Source = names[ci] + " (" + string.Format("{0:X8}:{1:X16}", g, i) + ")";
                     note = "copied from " + t.Source;
                     Log.Info("Distant terrain template: " + t.Source + ", definition v" + BitConverter.ToUInt32(t.Objd, 0).ToString("X") +
                         ", footprint " + (t.Ftpt != null) + ", lights " + (t.Lite != null));
                     return t;
                 }
-                catch (Exception ex) { Log.Error("Distant terrain template '" + c.Name + "' unusable", ex); }
+                catch (Exception ex) { Log.Error("Distant terrain template '" + names[ci] + "' unusable", ex); }
             }
             note = "no installed distant terrain object could be read to copy (" + cands.Count + " in CAW's catalog, " + KnownDistant.Length + " EA ones tried)";
             return null;
@@ -240,15 +238,5 @@ namespace CawPlus
         }
 
         private static string KeyText(ulong[] k) { return string.Format("{0:X8}:{1:X8}:{2:X16}", k[0], k[1], k[2]); }
-
-        private static Type FindType(string fullName)
-        {
-            foreach (Assembly a in AppDomain.CurrentDomain.GetAssemblies())
-            {
-                Type t = a.GetType(fullName, false);
-                if (t != null) return t;
-            }
-            return null;
-        }
     }
 }

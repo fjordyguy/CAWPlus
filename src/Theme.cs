@@ -8,7 +8,7 @@ namespace CawPlus
 {
     /// <summary>
     /// CAW Plus's dark look: dark window and title bar, cards for group boxes, rounded flat buttons (bold = accent),
-    /// toggle-style check boxes, slim sliders and progress bars. Theme.Apply(form) at the end of a window's constructor
+    /// rounded check boxes, slim sliders and progress bars. Theme.Apply(form) at the end of a window's constructor
     /// restyles every control in it (and any added later); nothing else in the window has to change. Each piece falls
     /// back to the standard look if Windows doesn't support it (dark title bar: Windows 10 1809+).
     /// </summary>
@@ -60,7 +60,6 @@ namespace CawPlus
         {
             if (c is Button) StyleButton((Button)c);
             else if (c is CheckBox) StyleCheck((CheckBox)c);
-            else if (c is RadioButton) StyleRadio((RadioButton)c);
             else if (c is GroupBox) StyleGroup((GroupBox)c);
             else if (c is TrackBar) c.BackColor = c.Parent != null ? c.Parent.BackColor : Back;
             else if (c is ComboBox)
@@ -173,7 +172,7 @@ namespace CawPlus
             };
         }
 
-        // ---------- check boxes and radio buttons ----------
+        // ---------- check boxes ----------
 
         private static void StyleCheck(CheckBox c)
         {
@@ -213,31 +212,6 @@ namespace CawPlus
                     TextFormatFlags tf = TextFormatFlags.Left | TextFormatFlags.EndEllipsis | (c.Height > 26 ? TextFormatFlags.WordBreak | TextFormatFlags.Top : TextFormatFlags.VerticalCenter);
                     Rectangle tr = c.Height > 26 ? new Rectangle(16, 1, c.Width - 16, c.Height - 1) : new Rectangle(16, 0, c.Width - 16, c.Height);
                     TextRenderer.DrawText(g, c.Text, c.Font, tr, c.Enabled ? c.ForeColor : Disabled, tf);
-                }
-                catch { }
-            };
-        }
-
-        private static void StyleRadio(RadioButton c)
-        {
-            bool hover = false;
-            c.ForeColor = Text;
-            c.MouseEnter += delegate { hover = true; c.Invalidate(); };
-            c.MouseLeave += delegate { hover = false; c.Invalidate(); };
-            c.Paint += delegate (object s, PaintEventArgs e)
-            {
-                try
-                {
-                    Graphics g = e.Graphics;
-                    g.Clear(c.BackColor.A == 255 ? c.BackColor : ParentBack(c));
-                    g.SmoothingMode = SmoothingMode.AntiAlias;
-                    int top = (c.Height - 14) / 2;
-                    RectangleF ring = new RectangleF(0.5f, top + 0.5f, 13, 13);
-                    using (SolidBrush br = new SolidBrush(Input)) g.FillEllipse(br, ring);
-                    using (Pen pen = new Pen(c.Checked || hover ? Accent : Color.FromArgb(110, 115, 123), 1.2f)) g.DrawEllipse(pen, ring);
-                    if (c.Checked) using (SolidBrush br = new SolidBrush(Accent)) g.FillEllipse(br, 3.5f, top + 3.5f, 7, 7);
-                    TextRenderer.DrawText(g, c.Text, c.Font, new Rectangle(16, 0, c.Width - 16, c.Height), c.Enabled ? c.ForeColor : Disabled,
-                        TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
                 }
                 catch { }
             };

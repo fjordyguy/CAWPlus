@@ -11,7 +11,7 @@
     <LangVersion>7.3</LangVersion>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
-    <Version>1.0.0</Version>
+    <Version>1.3.3</Version>
     <Product>CAW Plus</Product>
   </PropertyGroup>
 
@@ -27,11 +27,11 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Reference worlds for Auto-Place ("Props like"), made by tools/worldstats.py; shipped next to CAWPlus.exe -->
+    <!-- Reference worlds for Auto-Place and Spawners ("World type", tools/worldstats.py) and the presets (worlds.txt); shipped next to CAWPlus.exe -->
     <None Include="library\*.props" Link="Library\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <None Include="library\worlds.txt" Link="Library\worlds.txt" CopyToOutputDirectory="PreserveNewest" />
     <!-- also built into the exe, so presets work even if the Library folder isn't copied next to it -->
-    <EmbeddedResource Include="library\*.props;library\*.style;library\*_terrain.json;library\*_roadgeo.json;library\*_landform.json;library\worlds.txt" LogicalName="Library.%(Filename)%(Extension)" />
+    <EmbeddedResource Include="library\*.props;library\*.style;library\*_terrain.json;library\*_roadgeo.json;library\*_landform.json;library\worlds.txt;library\road_templates.txt;library\road_pieces.txt;library\town_design.txt;library\road_cost.txt" LogicalName="Library.%(Filename)%(Extension)" />
   </ItemGroup>
 
   <ItemGroup>

@@ -173,7 +173,7 @@ namespace CawPlus
 
         // ---------- helpers ----------
 
-        private delegate bool Mask(int i);
+        internal delegate bool Mask(int i);
 
         private static int[] Label(Mask m, int W, int H)
         {
@@ -203,7 +203,7 @@ namespace CawPlus
         }
 
         /// <summary>Metres to the nearest cell where 'm' holds (chamfer 3-4), 0 on such cells.</summary>
-        private static float[] Distance(Mask m, int W, int H, float cell)
+        internal static float[] Distance(Mask m, int W, int H, float cell)
         {
             float[] d = new float[W * H];
             for (int i = 0; i < d.Length; i++) d[i] = m(i) ? 0 : 1e9f;

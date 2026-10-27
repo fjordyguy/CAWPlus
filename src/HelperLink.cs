@@ -28,14 +28,14 @@ namespace CawPlus
             return g;
         }
 
-        /// <summary>An object's public fields of simple types (int, float, double, bool, string, enum, float[]) as
+        /// <summary>An object's public fields of simple types (int, float, double, bool, string, enum, float[], int[]) as
         /// prefix + name=value lines; other fields (grids, objects) are left out.</summary>
         public static void WriteFields(StringBuilder sb, string prefix, object o)
         {
             foreach (FieldInfo f in o.GetType().GetFields(BindingFlags.Public | BindingFlags.Instance))
             {
                 Type t = f.FieldType;
-                if (!(t == typeof(float[]) || t == typeof(float) || t == typeof(double) || t == typeof(int) || t == typeof(bool) || t == typeof(string) || t.IsEnum)) continue;
+                if (!(t == typeof(float[]) || t == typeof(int[]) || t == typeof(float) || t == typeof(double) || t == typeof(int) || t == typeof(bool) || t == typeof(string) || t.IsEnum)) continue;
                 object v = f.GetValue(o);
                 string s;
                 if (v == null) s = t == typeof(string) ? "" : "null";
@@ -45,11 +45,17 @@ namespace CawPlus
                     for (int i = 0; i < a.Length; i++) p[i] = a[i].ToString("R", Inv);
                     s = "[" + string.Join(",", p) + "]";
                 }
+                else if (v is int[])
+                {
+                    int[] a = (int[])v; string[] p = new string[a.Length];
+                    for (int i = 0; i < a.Length; i++) p[i] = a[i].ToString(Inv);
+                    s = "[" + string.Join(",", p) + "]";
+                }
                 else if (v is float) s = ((float)v).ToString("R", Inv);
                 else if (v is double) s = ((double)v).ToString("R", Inv);
                 else if (v is Enum) s = Convert.ToInt32(v).ToString(Inv);
                 else s = Convert.ToString(v, Inv);
-                sb.Append(prefix).Append(f.Name).Append('=').Append(s.Replace('\n', ' ')).Append('\n');
+                sb.Append(prefix).Append(f.Name).Append('=').Append(OneLine(s)).Append('\n');
             }
         }
 
@@ -70,6 +76,15 @@ namespace CawPlus
                     for (int i = 0; i < p.Length; i++) a[i] = float.Parse(p[i], Inv);
                     f.SetValue(o, a);
                 }
+                else if (t == typeof(int[]))
+                {
+                    if (s == "null" || s.Length < 2) { f.SetValue(o, null); continue; }
+                    string body = s.Substring(1, s.Length - 2);
+                    string[] p = body.Length == 0 ? new string[0] : body.Split(',');
+                    int[] a = new int[p.Length];
+                    for (int i = 0; i < p.Length; i++) a[i] = int.Parse(p[i], Inv);
+                    f.SetValue(o, a);
+                }
                 else if (t == typeof(float)) f.SetValue(o, float.Parse(s, Inv));
                 else if (t == typeof(double)) f.SetValue(o, double.Parse(s, Inv));
                 else if (t == typeof(int)) f.SetValue(o, int.Parse(s, Inv));
@@ -79,13 +94,21 @@ namespace CawPlus
             }
         }
 
+        /// <summary>A value safe to write as one key=value line (line breaks become spaces).</summary>
+        public static string OneLine(string s) { return s == null ? "" : s.Replace('\r', ' ').Replace('\n', ' '); }
+
+        /// <summary>A job file's key=value lines. A key given twice is refused: each is written once, so a repeat means a
+        /// value broke its line.</summary>
         public static Dictionary<string, string> ReadKeyValues(string path)
         {
             Dictionary<string, string> kv = new Dictionary<string, string>();
             foreach (string line in File.ReadAllLines(path))
             {
                 int e = line.IndexOf('=');
-                if (e > 0) kv[line.Substring(0, e)] = line.Substring(e + 1);
+                if (e <= 0) continue;
+                string k = line.Substring(0, e);
+                if (kv.ContainsKey(k)) throw new InvalidDataException("Job file " + Path.GetFileName(path) + ": '" + k + "' is given twice");
+                kv[k] = line.Substring(e + 1);
             }
             return kv;
         }

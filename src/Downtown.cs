@@ -16,11 +16,10 @@ namespace CawPlus
     {
         public int StreetsA = 3, StreetsB = 3;       // straight streets along each direction
         public float SpacingA = 80, SpacingB = 80;   // metres between neighbouring streets
-        public float LengthA = 140, LengthB = 140;   // median street length within the core, metres
         public int RoadsOut = 5;                     // road directions leaving the town (300 m from the core)
         public float GridShare = 0.6f;               // core road length within 10 deg of the two directions
 
-        /// <summary>"A,B,spA,spB,lenA,lenB,out,grid"; null if empty or malformed.</summary>
+        /// <summary>"A,B,spA,spB,lenA,lenB,out,grid" (lenA, lenB not used); null if empty or malformed.</summary>
         public static DowntownGrid Parse(string v)
         {
             if (string.IsNullOrEmpty(v)) return null;
@@ -30,7 +29,7 @@ namespace CawPlus
             DowntownGrid g = new DowntownGrid();
             g.StreetsA = int.Parse(p[0], ic); g.StreetsB = int.Parse(p[1], ic);
             g.SpacingA = float.Parse(p[2], ic); g.SpacingB = float.Parse(p[3], ic);
-            g.LengthA = float.Parse(p[4], ic); g.LengthB = float.Parse(p[5], ic);
+            // p[4], p[5]: median street lengths, not used
             g.RoadsOut = int.Parse(p[6], ic); g.GridShare = float.Parse(p[7], ic);
             return g;
         }
@@ -45,8 +44,6 @@ namespace CawPlus
             v.Clear(); foreach (DowntownGrid d in all) v.Add(d.StreetsB); g.StreetsB = (int)Median(v);
             v.Clear(); foreach (DowntownGrid d in all) if (d.SpacingA > 0) v.Add(d.SpacingA); g.SpacingA = Median(v);
             v.Clear(); foreach (DowntownGrid d in all) if (d.SpacingB > 0) v.Add(d.SpacingB); g.SpacingB = Median(v);
-            v.Clear(); foreach (DowntownGrid d in all) v.Add(d.LengthA); g.LengthA = Median(v);
-            v.Clear(); foreach (DowntownGrid d in all) v.Add(d.LengthB); g.LengthB = Median(v);
             v.Clear(); foreach (DowntownGrid d in all) v.Add(d.RoadsOut); g.RoadsOut = (int)Median(v);
             v.Clear(); foreach (DowntownGrid d in all) v.Add(d.GridShare); g.GridShare = Median(v);
             return g;
@@ -54,10 +51,10 @@ namespace CawPlus
 
         // ---------- the grid to lay ----------
 
-        /// <summary>Streets along the main street (2-6) and their spacing (45-160 m; the world's, else the other way's, else 80 m).</summary>
         /// <summary>A block grid at all: at least two streets each way (Sunlit Tides, Midnight Hollow, Isla Paradiso and
         /// Al Simhara have none: their centres are a few roads, not a grid).</summary>
         public bool HasGrid { get { return StreetsA >= 2 && StreetsB >= 2; } }
+        /// <summary>Streets along the main street (2-6) and their spacing (45-160 m; the world's, else the other way's, else 80 m).</summary>
         public int LayA { get { return Math.Max(2, Math.Min(6, StreetsA)); } }
         public int LayB { get { return Math.Max(2, Math.Min(6, StreetsB)); } }
         public float LaySpacingA { get { return Clamp(SpacingA > 0 ? SpacingA : SpacingB > 0 ? SpacingB : 80, 45, 160); } }
@@ -114,12 +111,12 @@ namespace CawPlus
                     if (cl.Count > 0 && o[0] - cl[cl.Count - 1][0] < 15) { cl[cl.Count - 1][0] = o[0]; cl[cl.Count - 1][1] += o[1]; }
                     else cl.Add(new[] { o[0], o[1] });
                 }
-                List<float> pos = new List<float>(), lens = new List<float>();
-                foreach (float[] c in cl) if (c[1] >= 50) { pos.Add(c[0]); lens.Add(c[1]); }
+                List<float> pos = new List<float>();
+                foreach (float[] c in cl) if (c[1] >= 50) pos.Add(c[0]);
                 List<float> sp = new List<float>();
                 for (int i = 1; i < pos.Count; i++) if (pos[i] - pos[i - 1] < 200) sp.Add(pos[i] - pos[i - 1]);
-                if (axis == 0) { g.StreetsA = pos.Count; g.SpacingA = Median(sp); g.LengthA = Median(lens); }
-                else { g.StreetsB = pos.Count; g.SpacingB = Median(sp); g.LengthB = Median(lens); }
+                if (axis == 0) { g.StreetsA = pos.Count; g.SpacingA = Median(sp); }
+                else { g.StreetsB = pos.Count; g.SpacingB = Median(sp); }
             }
             outAngles.Sort();
             int groups = 0; float last = -99;

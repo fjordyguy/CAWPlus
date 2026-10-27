@@ -52,7 +52,6 @@ namespace CawPlus
         };
 
         private readonly Dictionary<string, string> state = new Dictionary<string, string>(); // key -> "done" | "skipped"
-        private readonly Form owner;
         private ListBox list;
         private Label title, text, progressLabel;
         private Button btnOpen, btnDone, btnSkip, btnBack, btnNext;
@@ -61,7 +60,6 @@ namespace CawPlus
 
         public WizardForm(Form owner)
         {
-            this.owner = owner;
             SuspendLayout();
             Text = "Create World  (CAW Plus)";
             FormBorderStyle = FormBorderStyle.FixedToolWindow;

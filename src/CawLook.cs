@@ -84,10 +84,6 @@ namespace CawPlus
         private static bool hooked;
         // what was changed, so turning it off puts CAW's look back exactly
         private static readonly Dictionary<object, Dictionary<string, object>> saved = new Dictionary<object, Dictionary<string, object>>();
-        private static Form main;
-
-        public static bool IsDark { get { return dark; } }
-
         private static string SettingsFile { get { return Path.Combine(Log.Dir, "settings.txt"); } }
 
         /// <summary>The remembered choice (Documents\CAWPlus\settings.txt, "caw_dark=1").</summary>
@@ -119,7 +115,6 @@ namespace CawPlus
         /// <summary>Turns CAW's dark look on or off (and remembers it).</summary>
         public static void SetDark(Form form, bool on, bool remember)
         {
-            main = form;
             if (remember) Remember(on);
             if (on == dark) return;
             int changed = 0;

@@ -29,21 +29,25 @@ namespace CawPlus
             public bool[] Blocked;   // planning cells a path may not use: the world's lots (#136)
             public float[] Avoid;    // 0..1 per cell: objects already there (trees, bushes, rocks); paths prefer the gaps
             public List<float[]> All = new List<float[]>(); // every path point so far, to keep paths apart
+            public List<PlannedLot> Lots;  // the planned lots: paths never cross them (EA: 0 % of path length over lots)
+            public List<float[]> Hard;     // hard blocker circles (the Footpaths tool's lots)
         }
+
+        // EA's footpaths (tools/roadlearn/fpstudy.py, 22 worlds): they never cross themselves, a road or a lot; they run a
+        // median ~40 m from roads (10th percentile ~13 m) and 20-40 m from lots (behind and between the houses), other
+        // paths a median 40-60 m away; their ends finish at a road, at another path or loose, about a third each.
+        private const float PathSpacing = 35f;   // a new trail starts and ends at least this far from other paths
+        private const float NearLots = 150f;     // most trails start within this of a lot (EA: paths are in town)
 
         /// <summary>
         /// Footpaths for roads that are already built (the Footpaths tool, run after Build roads): the roads come in as
         /// polylines in metres; the town centre is where they are densest. 'targets' = the Like world's footpath figures
         /// (km, distance from roads p10 / p50 / p90, piece length; worlds.txt column 33), 'amount' scales the length.
         /// Several layouts are tried and the one closest to the targets kept; 'checks' says how close.
-        /// </summary>
-        public static List<FootPath> PlanOnRoads(Grid h, List<List<float[]>> roads, float sea, int seed, float[] targets, float amount,
-                                                 int tries, out string checks)
-        { return PlanOnRoads(h, roads, sea, seed, targets, amount, tries, null, out checks); }
-
-        /// <summary>As above; 'blockers' = circles (x, z, radius, hard; metres on the map) paths keep out of: the world's
+        /// 'blockers' = circles (x, z, radius, hard; metres on the map) paths keep out of: the world's
         /// lots (hard = 1: never crossed) and the trees, bushes and rocks already placed (hard = 0: routes prefer the gaps)
-        /// (the tester, 2026-10-25: paths ran through lots and over trees). Every path point is then pushed clear of them all.</summary>
+        /// (the tester, 2026-10-25: paths ran through lots and over trees). Every path point is then pushed clear of them all.
+        /// </summary>
         public static List<FootPath> PlanOnRoads(Grid h, List<List<float[]>> roads, float sea, int seed, float[] targets, float amount,
                                                  int tries, List<float[]> blockers, out string checks)
         {
@@ -122,6 +126,9 @@ namespace CawPlus
             c.Water = Distance(h, delegate (int i) { return h.D[i] <= s.SeaLevel + 0.5f; });
             c.Blocked = BlockedCells(c.N, s.PathBlockers, true);
             c.Avoid = AvoidCells(c.N, s.PathBlockers);
+            c.Lots = net.Lots.Count > 0 ? net.Lots : null;
+            if (s.PathBlockers != null) { c.Hard = new List<float[]>(); foreach (float[] o in s.PathBlockers) if (o.Length > 3 && o[3] > 0) c.Hard.Add(o); }
+            if (c.Lots != null) c.Blocked = LotCells(c.N, c.Lots, c.Blocked);
             bool[] road = RoadCells(net, c.N);
             c.Road = Distance(h, delegate (int i) { return road[i]; });
             float worldSize = (c.N - 1) * Cell;
@@ -147,7 +154,7 @@ namespace CawPlus
                 float[] a = Reach(c, hub, th), b = Reach(c, hub, th + Math.PI + (c.Rng.NextDouble() - 0.5) * 0.8);
                 if (a == null || b == null || Dist(a, b) < 80) continue;
                 List<float[]> t = Route(c, a, b);
-                if (t != null) AddPieces(c, net, Wander(t), "Trail", 60);
+                if (t != null) AddPieces(c, net, Wander(c, t), "Trail", 60);
             }
 
             // 3. a loop round the park
@@ -174,23 +181,29 @@ namespace CawPlus
             if (s.FootpathKm > 0)
             {
                 float km = Km(net);
-                for (int tries = 0; tries < 400 && km < s.FootpathKm; tries++)
+                for (int tries = 0; tries < 600 && km < s.FootpathKm; tries++)
                 {
                     float[] a = { (float)c.Rng.NextDouble() * worldSize, (float)c.Rng.NextDouble() * worldSize };
                     float ra = At(c.Road, a);
-                    if (!Usable(c, a) || ra < s.PathRoadMin || ra > s.PathRoadMax || Near(c.All, a, 60)) continue;
-                    double th = c.Rng.NextDouble() * Math.PI * 2; float len = 150 + (float)c.Rng.NextDouble() * 300;
+                    if (!Usable(c, a) || ra < s.PathRoadMin || ra > s.PathRoadMax || Near(c.All, a, PathSpacing)) continue;
+                    if (c.Lots != null && tries % 10 < 7 && !NearLot(c, a, NearLots)) continue; // mostly in town, behind the houses
+                    double th = c.Rng.NextDouble() * Math.PI * 2; float len = 120 + (float)c.Rng.NextDouble() * 260;
                     float[] b = { a[0] + len * (float)Math.Cos(th), a[1] + len * (float)Math.Sin(th) };
-                    if (!Usable(c, b) || At(c.Road, b) < s.PathRoadMin || Near(c.All, b, 60)) continue;
+                    // a third of the trails branch off a path already there (EA: a third of path ends are on another path)
+                    bool branch = c.All.Count > 0 && tries % 3 == 0;
+                    if (branch) { b = NearestPathPoint(c, a); if (b == null || Dist(a, b) < 60 || Dist(a, b) > 400) continue; }
+                    else if (!Usable(c, b) || At(c.Road, b) < s.PathRoadMin || Near(c.All, b, PathSpacing)) continue;
                     List<float[]> t = Route(c, a, b);
                     if (t == null) continue;
                     int before = net.Paths.Count;
-                    AddPieces(c, net, Wander(t), "Trail", 60);
+                    AddPieces(c, net, Wander(c, t), "Trail", 60);
                     for (int k = before; k < net.Paths.Count; k++) km += Km(net.Paths[k].Points);
                 }
             }
             // 4. no paths ending in the middle of nowhere: each loose end is led to the nearest road verge or path
+            Tidy(c, net);
             net.PathEndsJoined = ConnectEnds(c, net);
+            Tidy(c, net);
             net.PathKm = Km(net);
         }
 
@@ -237,6 +250,172 @@ namespace CawPlus
                 }
             }
             return joined;
+        }
+
+        /// <summary>
+        /// Every path made clean, as EA's are: a loop where a path crosses itself is cut out at the crossing; a path is
+        /// split wherever it would run over a lot, onto water or within RoadGap - 1 m of a road (checked every 2 m, so a
+        /// straight piece can't clip a lot's corner between its points); pieces under 30 m are dropped.
+        /// </summary>
+        private static void Tidy(Ctx c, RoadNet net)
+        {
+            JoinEnds(net); // pieces meeting end to end are one path: a loop across them is a path crossing itself too
+            List<FootPath> kept = new List<FootPath>();
+            foreach (FootPath fp in net.Paths)
+            {
+                List<float[]> pts = fp.Closed ? fp.Points : CutLoops(fp.Points);
+                List<float[]> cur = new List<float[]>();
+                bool whole = true;
+                for (int i = 0; i < pts.Count; i++)
+                {
+                    bool ok = Clear(c, pts[i]);
+                    if (ok && i > 0 && cur.Count > 0)
+                    {
+                        float L = Dist(pts[i - 1], pts[i]);
+                        int steps = Math.Max(1, (int)(L / 2));
+                        for (int k = 1; k < steps && ok; k++)
+                        {
+                            float t = (float)k / steps;
+                            ok = Clear(c, new[] { pts[i - 1][0] + (pts[i][0] - pts[i - 1][0]) * t, pts[i - 1][1] + (pts[i][1] - pts[i - 1][1]) * t });
+                        }
+                    }
+                    if (ok) { cur.Add(pts[i]); continue; }
+                    whole = false;
+                    if (Length(cur) >= 30) { FootPath f = new FootPath(); f.Kind = fp.Kind; f.Points = cur; kept.Add(f); }
+                    cur = ok ? new List<float[]> { pts[i] } : new List<float[]>();
+                }
+                if (whole) { fp.Points = pts; kept.Add(fp); }
+                else if (Length(cur) >= 30) { FootPath f = new FootPath(); f.Kind = fp.Kind; f.Points = cur; kept.Add(f); }
+            }
+            net.Paths.Clear(); net.Paths.AddRange(kept);
+            c.All.Clear();
+            foreach (FootPath fp in net.Paths) c.All.AddRange(fp.Points);
+        }
+
+        /// <summary>Joins open paths whose ends meet (within 3 m) where no third path end does.</summary>
+        private static void JoinEnds(RoadNet net)
+        {
+            for (bool joined = true; joined; )
+            {
+                joined = false;
+                List<FootPath> ps = net.Paths;
+                for (int i = 0; i < ps.Count && !joined; i++)
+                {
+                    if (ps[i].Closed || ps[i].Points.Count < 2) continue;
+                    for (int ei = 0; ei < 2 && !joined; ei++)
+                    {
+                        float[] e = ei == 0 ? ps[i].Points[0] : ps[i].Points[ps[i].Points.Count - 1];
+                        int hits = 0, j = -1, ej = 0;
+                        for (int k = 0; k < ps.Count; k++)
+                        {
+                            if (k == i || ps[k].Closed || ps[k].Points.Count < 2) continue;
+                            for (int ek = 0; ek < 2; ek++)
+                            {
+                                float[] f = ek == 0 ? ps[k].Points[0] : ps[k].Points[ps[k].Points.Count - 1];
+                                if (Dist(e, f) < 3) { hits++; j = k; ej = ek; }
+                            }
+                        }
+                        if (hits != 1) continue;
+                        List<float[]> a = new List<float[]>(ps[i].Points), b = new List<float[]>(ps[j].Points);
+                        if (ei == 0) a.Reverse();   // a now ends at the meeting point
+                        if (ej == 1) b.Reverse();   // b now starts at it
+                        b.RemoveAt(0); a.AddRange(b);
+                        ps[i].Points = a;
+                        ps.RemoveAt(j);
+                        joined = true;
+                    }
+                }
+            }
+        }
+
+        /// <summary>Removes the loop wherever the line crosses itself: the points between the two crossing segments go and
+        /// the crossing point joins the two halves.</summary>
+        private static List<float[]> CutLoops(List<float[]> p)
+        {
+            List<float[]> q = new List<float[]>(p);
+            for (int guard = 0; guard < 50; guard++)
+            {
+                bool cut = false;
+                for (int a = 0; a + 1 < q.Count && !cut; a++)
+                    for (int b = q.Count - 2; b > a + 1 && !cut; b--)
+                    {
+                        float[] x = Cross(q[a], q[a + 1], q[b], q[b + 1]);
+                        if (x == null) continue;
+                        q.RemoveRange(a + 1, b - a);
+                        q.Insert(a + 1, x);
+                        cut = true;
+                    }
+                if (!cut) break;
+            }
+            return q;
+        }
+
+        /// <summary>Where segment a-b crosses segment c-d (not at their ends), else null.</summary>
+        private static float[] Cross(float[] a, float[] b, float[] c, float[] d)
+        {
+            float rx = b[0] - a[0], ry = b[1] - a[1], sx = d[0] - c[0], sy = d[1] - c[1];
+            float den = rx * sy - ry * sx;
+            if (Math.Abs(den) < 1e-6f) return null;
+            float t = ((c[0] - a[0]) * sy - (c[1] - a[1]) * sx) / den, u = ((c[0] - a[0]) * ry - (c[1] - a[1]) * rx) / den;
+            if (t <= 1e-4f || t >= 1 - 1e-4f || u <= 1e-4f || u >= 1 - 1e-4f) return null;
+            return new[] { a[0] + rx * t, a[1] + ry * t };
+        }
+
+        /// <summary>Open ground for a path: on land, inside the rim, not over a lot (exact rectangle + 1 m) or a hard blocker,
+        /// and no nearer a road than RoadGap - 1 m.</summary>
+        private static bool Clear(Ctx c, float[] p)
+        {
+            if (!Inside(c, p) || TerrainGen.Sample(c.H, p[0] / Cell, p[1] / Cell) <= c.Sea + 0.5f) return false;
+            if (At(c.Road, p) < RoadGap - 1) return false;
+            if (c.Lots != null)
+                foreach (PlannedLot l in c.Lots)
+                {
+                    float rx = p[0] - l.X, rz = p[1] - l.Z;
+                    float u = rx * l.Ux + rz * l.Uz, v = rx * l.Vx + rz * l.Vz;
+                    if (u > -1 && u < l.Width + 1 && v > -1 && v < l.Depth + 1) return false;
+                }
+            if (c.Hard != null)
+                foreach (float[] o in c.Hard) if (Sq(p[0] - o[0]) + Sq(p[1] - o[1]) < Sq(o[2] + 1)) return false;
+            return true;
+        }
+
+        /// <summary>Planning cells under a lot (its rectangle widened by half a cell), added to 'blocked'.</summary>
+        private static bool[] LotCells(int n, List<PlannedLot> lots, bool[] blocked)
+        {
+            bool[] b = blocked ?? new bool[n * n];
+            float m = Cell * 0.5f;
+            foreach (PlannedLot l in lots)
+            {
+                float[] cc = l.Centre; float r = (float)Math.Sqrt(l.Width * l.Width + l.Depth * l.Depth) / 2 + m;
+                int x0 = Math.Max(0, (int)((cc[0] - r) / Cell)), x1 = Math.Min(n - 1, (int)((cc[0] + r) / Cell) + 1);
+                int y0 = Math.Max(0, (int)((cc[1] - r) / Cell)), y1 = Math.Min(n - 1, (int)((cc[1] + r) / Cell) + 1);
+                for (int y = y0; y <= y1; y++)
+                    for (int x = x0; x <= x1; x++)
+                    {
+                        float rx = x * Cell - l.X, rz = y * Cell - l.Z;
+                        float u = rx * l.Ux + rz * l.Uz, v = rx * l.Vx + rz * l.Vz;
+                        if (u > -m && u < l.Width + m && v > -m && v < l.Depth + m) b[y * n + x] = true;
+                    }
+            }
+            return b;
+        }
+
+        private static bool NearLot(Ctx c, float[] p, float r)
+        {
+            foreach (PlannedLot l in c.Lots) { float[] cc = l.Centre; if (Sq(cc[0] - p[0]) + Sq(cc[1] - p[1]) < r * r) return true; }
+            return false;
+        }
+
+        /// <summary>The nearest point on a path already made (for a trail branching off it).</summary>
+        private static float[] NearestPathPoint(Ctx c, float[] p)
+        {
+            float[] best = null; float bd = float.MaxValue;
+            foreach (float[] q in c.All)
+            {
+                float d = Sq(q[0] - p[0]) + Sq(q[1] - p[1]);
+                if (d < bd) { bd = d; best = q; }
+            }
+            return best;
         }
 
         /// <summary>Cheapest walk from 'start' to a road verge (just outside RoadGap) or a cell in 'other', up to maxLen metres.</summary>
@@ -382,6 +561,7 @@ namespace CawPlus
                     if (nx < 1 || ny < 1 || nx >= n - 1 || ny >= n - 1) continue;
                     int j = ny * n + nx;
                     if (c.H.D[j] <= c.Sea + 0.5f || (c.Blocked != null && c.Blocked[j])) continue;
+                    if (c.Road.D[j] < RoadGap && j != goal) continue; // never across a road
                     float len = k < 4 ? Cell : Cell * 1.414f;
                     float grade = Math.Abs(c.H.D[j] - c.H.D[i]) / len;
                     if (grade > MaxSlope) continue;
@@ -400,7 +580,7 @@ namespace CawPlus
         }
 
         /// <summary>Takes the grid out of a route and lets it meander a little, like EA's park trails.</summary>
-        private static List<float[]> Wander(List<float[]> p)
+        private static List<float[]> Wander(Ctx c, List<float[]> p)
         {
             p = Simplify(p, 6f, 48f);
             List<float[]> r = new List<float[]>();
@@ -420,7 +600,10 @@ namespace CawPlus
                 float[] d = Dir(r[Math.Max(0, i - 1)], r[Math.Min(r.Count - 1, i + 1)]);
                 float off = (float)(8 * Math.Sin(along / 41.0 + ph) + 4 * Math.Sin(along / 15.0 + 1.7 + ph));
                 float fade = Math.Max(0, Math.Min(1, Math.Min(along, total - along) / 20)); // ends stay put
-                o.Add(new[] { r[i][0] - d[1] * off * fade, r[i][1] + d[0] * off * fade });
+                float[] q = { r[i][0] - d[1] * off * fade, r[i][1] + d[0] * off * fade };
+                if (c != null && (!Usable(c, q) || At(c.Road, q) < RoadGap + 2)) { q[0] = (q[0] + r[i][0]) / 2; q[1] = (q[1] + r[i][1]) / 2; }
+                if (c != null && (!Usable(c, q) || At(c.Road, q) < RoadGap + 2)) q = r[i]; // no wandering onto a lot, road or water
+                o.Add(q);
             }
             return o;
         }

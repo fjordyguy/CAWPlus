@@ -6,7 +6,7 @@ using System.Windows.Forms;
 namespace CawPlus
 {
     /// <summary>
-    /// Self-test (Utilities toolbar): runs every CAW call CAW Plus relies on, in the open world, and writes a pass/fail
+    /// Self-test (CAW Plus tab; Utilities toolbar as a fallback): runs every CAW call CAW Plus relies on, in the open world, and writes a pass/fail
     /// report to the log and Documents\CAWPlus\selftest.txt. Changes go into one undo step, which it undoes at the end.
     /// It also measures two things the code can't know in advance: which way CAW turns an intersection for a given
     /// rotation, and how a bridge's yaw lines up with its span.
@@ -21,6 +21,16 @@ namespace CawPlus
             public void Bad(string what, string detail) { Fail++; Add("FAIL  " + what + (detail.Length > 0 ? ": " + detail : "")); }
             public void Note(string text) { Add("      " + text); }
             private void Add(string s) { Lines.Add(s); Log.Info("Self-test " + s); }
+        }
+
+        /// <summary>Documents\CAWPlus\bridges.txt: the bridge spans the self-test measured.</summary>
+        public static string BridgesFile { get { return Path.Combine(Log.Dir, "bridges.txt"); } }
+
+        /// <summary>The lines of bridges.txt, or null if the self-test hasn't measured the bridges yet.</summary>
+        public static string[] MeasuredBridges()
+        {
+            try { return File.Exists(BridgesFile) ? File.ReadAllLines(BridgesFile) : null; }
+            catch (Exception ex) { Log.Error("Reading bridges.txt failed", ex); return null; }
         }
 
         public static void Run(IWin32Window owner)
@@ -172,6 +182,40 @@ namespace CawPlus
                 double span = Math.Sqrt((p1[0] - p0[0]) * (p1[0] - p0[0]) + (p1[1] - p0[1]) * (p1[1] - p0[1]));
                 if (off > 10) throw new Exception(string.Format("'{0}' spans {1:F1} m but is {2:F0}° off the road direction (bridge yaw needs fixing)", br.Name, span, off));
                 return string.Format("'{0}' spans {1:F1} m, {2:F0}° off the road direction", br.Name, span, off);
+            });
+
+            // 5b. every EA bridge type: its span (port to port) in CAW, kept in bridges.txt so the planner and Build roads
+            //     use each World type's own bridges at their real lengths; a type whose pack isn't installed, or that is
+            //     not a road bridge, is written with length 0
+            Try(r, "Measure bridges (every EA bridge type)", delegate
+            {
+                List<string> lines = new List<string>();
+                lines.Add("# EA bridge spans measured in CAW by the self-test: instance|name|metres port to port (0 = not placed or not a road bridge)");
+                int measured = 0;
+                string summary = "";
+                foreach (BridgeType t in Bridges.All)
+                {
+                    float len = 0;
+                    try
+                    {
+                        Caw.CatalogItem item = RoadBuilder.FindBridge(t);
+                        object spline = item != null ? Caw.PlaceBridge(item, tx + 120, tz + 40, Caw.TerrainHeight(world, tx + 120, tz + 40), 0, group) : null;
+                        group = true;
+                        if (spline != null)
+                        {
+                            roads.Add(spline);
+                            float[] p0 = Caw.PortPosition(spline, 0), p1 = Caw.PortPosition(spline, 1);
+                            len = (float)Math.Sqrt((p1[0] - p0[0]) * (p1[0] - p0[0]) + (p1[1] - p0[1]) * (p1[1] - p0[1]));
+                            measured++;
+                        }
+                    }
+                    catch (Exception ex) { Log.Error("Measuring bridge " + t.Name + " failed", ex); }
+                    lines.Add(t.Instance.ToString("x16") + "|" + t.Name + "|" + len.ToString("F1", System.Globalization.CultureInfo.InvariantCulture));
+                    summary += (summary.Length > 0 ? ", " : "") + t.Name + " " + (len > 0 ? len.ToString("F1") + " m" : "-");
+                }
+                File.WriteAllLines(BridgesFile, lines.ToArray());
+                Bridges.ApplyMeasured(lines.ToArray());
+                return measured + " of " + Bridges.All.Length + " placed: " + summary;
             });
 
             // 6. undo everything in one step

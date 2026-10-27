@@ -92,7 +92,7 @@ namespace CawPlus
             Grid last = ImageIO.ReadPngChannel0(gen), cur = ImageIO.ReadPngChannel0(currentPng);
             if (last.W != cur.W || last.H != cur.H) { why = "size changed"; return false; }
             int diff = 0;
-            for (int i = 0; i < cur.D.Length; i++) if (Math.Abs(cur.D[i] - last.D[i]) > 6f / 255f) diff++;
+            for (int i = 0; i < cur.D.Length; i++) if (Math.Abs(cur.D[i] - last.D[i]) > Threshold) diff++;
             float pct = 100f * diff / cur.D.Length;
             if (pct >= 2f) { why = string.Format("{0:F1}% of it was painted by hand since", pct); return false; }
             why = ""; return true;

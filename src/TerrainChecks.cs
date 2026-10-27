@@ -430,7 +430,7 @@ namespace CawPlus
 
     /// <summary>
     /// The terrain checklist (the tester, 2026-10-21: "a pass system ... the same for terrain generation"): a generated map
-    /// is measured as EA's worlds were and has to tick off nine points against the Like world's own figures.
+    /// is measured as EA's worlds were and has to tick off up to twelve points against the world type's own figures.
     /// TerrainGen.GenerateChecked tries several variations of a seed and keeps the one that passes most.
     /// </summary>
     internal static class TerrainChecks
@@ -449,7 +449,7 @@ namespace CawPlus
             }
         }
 
-        /// <summary>water: the map's water share to aim for (the Like world's, or the Water slider when moved by hand).</summary>
+        /// <summary>water: the map's water share to aim for (the world type's, or the Water slider when moved by hand).</summary>
         public static Result Check(TerrainProfile g, TerrainProfile e, float water)
         {
             Result r = new Result();
@@ -474,12 +474,12 @@ namespace CawPlus
             // 8. smoothness: bumps under ~25 m and relief over 25-120 m (EA's land is smooth outside its mountains)
             if (!float.IsNaN(e.RelFine) && !float.IsNaN(e.RelMid))
                 Add(r, ref sum, "smoothness", Math.Min(Ratio(g.RelFine + 0.1, e.RelFine + 0.1), Ratio(g.RelMid + 0.3, e.RelMid + 0.3)), 0.7);
-            // 9b. texture: rugged and smooth ground in the same proportions (the tester: Aurora Skies too soft)
+            // 9. texture: rugged and smooth ground in the same proportions (the tester: Aurora Skies too soft)
             double tex = TerrainProfile.Texture(g, e);
             if (!double.IsNaN(tex)) Add(r, ref sum, "texture", tex, 0.7);
-            // 9. coastline: as clean or ragged as EA's
+            // 10. coastline: as clean or ragged as EA's
             if (g.Water > 0.01 && e.Water > 0.01 && g.Shore > 0 && e.Shore > 0) Add(r, ref sum, "coastline", Ratio(g.Shore, e.Shore), 0.6);
-            // 10. landform structure (#95): as many separate hill masses of the same size, as much raised ground, the
+            // 11. landform structure (#95): as many separate hill masses of the same size, as much raised ground, the
             // open floor as connected (Lucky Palms: 9 buttes on one floor; Sunset Valley: one upland)
             double st = UseLandforms ? Structure(g, e) : double.NaN;
             if (!double.IsNaN(st))
@@ -488,7 +488,7 @@ namespace CawPlus
                 r.Landforms = string.Format(CultureInfo.InvariantCulture, "Hill masses {0:F0} (world type {1:F0}), median {2:F0} ha ({3:F0}), raised ground {4:P0} ({5:P0}), open floor {6:P0} connected ({7:P0})",
                     g.HillMasses, e.HillMasses, g.MassHaMedian, e.MassHaMedian, g.RaisedShare, e.RaisedShare, g.FloorConnected, e.FloorConnected);
             }
-            // 11. feature checklist (#95): beaches, sea cliffs, islands, river, lakes, mountains, hills, mesas, deep valleys,
+            // 12. feature checklist (#95): beaches, sea cliffs, islands, river, lakes, mountains, hills, mesas, deep valleys,
             // inland cliffs, a large flat area: the same ones the world type has
             if (UseFeatures && e.Want != null && g.Got != null)
             {

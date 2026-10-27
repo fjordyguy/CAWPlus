@@ -15,15 +15,16 @@ namespace CawPlus
 
         private sealed class End { public int Road; public bool AtStart; }
         private sealed class Node { public float[] P; public List<End> Ends = new List<End>(); public object Intersection; public bool[] Used; public bool Bridge; public Dictionary<int, int> Assigned; }
-        private sealed class Span { public float[] Mid, Dir, EndA, EndB; }
+        private sealed class Span { public float[] Mid, Dir, EndA, EndB; public float Length = BridgeLength; public BridgeType Type; }
 
-        internal const float BridgeLength = 72f; // EA's EP7 bridges: 72 m (wooden, flat), plank 65 m
+        internal const float BridgeLength = RoadPlanner.DefaultBridgeSpan; // EA's EP7 bridges: 72 m (wooden, flat), plank 65 m
 
         // known road bridge objects (instance, name), best first
         private static readonly ulong[] BridgeIds = { 0x98d89bUL, 0x98d899UL, 0x989e21UL };
         private static readonly string[] BridgeNames = { "BridgeFlatEP7", "BridgeWoodenEP7", "bridgePlank" };
 
-        public static string Build(object world, TerrainInfo ti, RoadNet net, ProgressFn progress, bool grade = false)
+        /// <param name="bridges">the world type's road bridges (Bridges.ForWorld); null = EA's EP7 bridges</param>
+        public static string Build(object world, TerrainInfo ti, RoadNet net, ProgressFn progress, bool grade = false, List<BridgeType> bridges = null)
         {
             // 1. Planned metres -> world (x, z).
             List<List<float[]>> roads = new List<List<float[]>>();
@@ -66,8 +67,14 @@ namespace CawPlus
                 TerrainSampler.Map(ti.Orientation, b[2] / ti.WorldSize, b[3] / ti.WorldSize, out bx, out bz);
                 float[] A = { ti.Origin + ax * ti.WorldSize, ti.Origin + az * ti.WorldSize }, B = { ti.Origin + bx * ti.WorldSize, ti.Origin + bz * ti.WorldSize };
                 Span sp = new Span(); sp.Mid = new[] { (A[0] + B[0]) / 2, (A[1] + B[1]) / 2 }; sp.Dir = Dir(A, B);
-                sp.EndA = new[] { sp.Mid[0] - sp.Dir[0] * BridgeLength / 2, sp.Mid[1] - sp.Dir[1] * BridgeLength / 2 };
-                sp.EndB = new[] { sp.Mid[0] + sp.Dir[0] * BridgeLength / 2, sp.Mid[1] + sp.Dir[1] * BridgeLength / 2 };
+                // the world type's own bridge that fits this crossing (the shortest reaching 8 m onto both banks)
+                if (bridges != null && bridges.Count > 0)
+                {
+                    sp.Type = Bridges.Pick(bridges, (float)Math.Sqrt(D2(A, B)));
+                    if (sp.Type != null && sp.Type.Length > 0) sp.Length = sp.Type.Length;
+                }
+                sp.EndA = new[] { sp.Mid[0] - sp.Dir[0] * sp.Length / 2, sp.Mid[1] - sp.Dir[1] * sp.Length / 2 };
+                sp.EndB = new[] { sp.Mid[0] + sp.Dir[0] * sp.Length / 2, sp.Mid[1] + sp.Dir[1] * sp.Length / 2 };
                 if (CutForBridge(roads, sp)) spans.Add(sp);
                 else Log.Info(string.Format("  bridge at ({0:F1}, {1:F1}): no road found to cut", sp.Mid[0], sp.Mid[1]));
             }
@@ -230,7 +237,7 @@ namespace CawPlus
             List<float[]> builtEnds = new List<float[]>();   // ends of every road piece built (x0, z0, x1, z1), to never build one twice
             List<object> bridgeSplines = new List<object>(); // bridge pieces: never moved or capped, only joined to
 
-            // 4. Intersections where 3+ roads meet, turned to line up with the longest road.
+            // 4. Intersections where 3+ roads meet: moved onto their roads' lines (FitJunctionPoint), turned to suit all of them (FitRotation).
             bool group = false;
             int inters = 0, splines = 0, failed = 0;
             PortMisfit.Clear();
@@ -267,6 +274,7 @@ namespace CawPlus
             //     measured on Vermont's three bridges), its deck level with the banks; the road ends there use its ports.
             int bridgesBuilt = 0;
             Caw.CatalogItem bridgeItem = spans.Count > 0 ? FindBridge() : null;
+            Dictionary<ulong, Caw.CatalogItem> bridgeItems = new Dictionary<ulong, Caw.CatalogItem>();
             if (bridgeItem != null)
             {
                 try { if (!Caw.UseLayer(world, "Bridges & Tunnels")) Caw.EnsureLayer(world, "Bridges & Tunnels"); } // objects need a World Layer
@@ -275,11 +283,25 @@ namespace CawPlus
             foreach (Span sp in spans)
             {
                 if (bridgeItem == null) break;
+                Caw.CatalogItem item = bridgeItem;
+                if (sp.Type != null)
+                {
+                    if (!bridgeItems.ContainsKey(sp.Type.Instance)) bridgeItems[sp.Type.Instance] = FindBridge(sp.Type);
+                    if (bridgeItems[sp.Type.Instance] != null) item = bridgeItems[sp.Type.Instance];
+                }
                 float deck = Math.Max(ti.WaterLevel + 1.5f, (Caw.TerrainHeight(world, sp.EndA[0], sp.EndA[1]) + Caw.TerrainHeight(world, sp.EndB[0], sp.EndB[1])) / 2);
                 float yaw = -(float)Math.Atan2(sp.Dir[1], sp.Dir[0]) - (float)Math.PI / 2;
                 object spline = null;
-                try { spline = Caw.PlaceBridge(bridgeItem, sp.Mid[0], sp.Mid[1], deck, yaw, group); }
+                try { spline = Caw.PlaceBridge(item, sp.Mid[0], sp.Mid[1], deck, yaw, group); }
                 catch (Exception ex) { Log.Error("Placing a bridge failed", ex); }
+                if (spline == null && item != bridgeItem)
+                {
+                    // the world type's own bridge isn't installed (its pack is missing): EA's EP7 bridge instead
+                    Log.Info("  " + item.Name + " couldn't be placed; using " + bridgeItem.Name);
+                    bridgeItems[sp.Type.Instance] = null;
+                    try { spline = Caw.PlaceBridge(bridgeItem, sp.Mid[0], sp.Mid[1], deck, yaw, true); }
+                    catch (Exception ex) { Log.Error("Placing a bridge failed", ex); }
+                }
                 if (spline == null) { failed++; group = true; continue; } // commands may have been submitted: keep one undo step
                 group = true; bridgesBuilt++;
                 made.Add(spline); bridgeSplines.Add(spline);
@@ -509,26 +531,10 @@ namespace CawPlus
             try { Tidy(world, ti, made, bridgeSplines, ref group, out snapped, out caps); }
             catch (Exception ex) { Log.Error("Tidying road ends failed", ex); }
 
-            // 7. Footpaths: their own network, never joined to the roads (as in Riverview).
-            int paths = 0, pathPieces = 0, pathFailed = 0;
-            foreach (FootPath fp in net.Paths)
-            {
-                List<float[]> w = new List<float[]>();
-                foreach (float[] p in fp.Points)
-                {
-                    float wx, wz;
-                    TerrainSampler.Map(ti.Orientation, p[0] / ti.WorldSize, p[1] / ti.WorldSize, out wx, out wz);
-                    w.Add(new[] { ti.Origin + wx * ti.WorldSize, ti.Origin + wz * ti.WorldSize });
-                }
-                try { if (BuildPath(world, w, fp.Closed, ref group, ref pathPieces, ref pathFailed)) paths++; }
-                catch (Exception ex) { Log.Error("Building a footpath failed", ex); pathFailed++; }
-            }
-            if (net.Paths.Count > 0) Log.Info(string.Format("  footpaths: {0} of {1} built, {2} pieces, {3} pieces refused", paths, net.Paths.Count, pathPieces, pathFailed));
-
             try { CheckBuilt(world, made); }
             catch (Exception ex) { Log.Error("Checking built roads failed", ex); }
 
-            // 8. CAW's own grading over the roads (the tester: "run this over the roads which will make them smooth"):
+            // 7. CAW's own grading over the roads (the tester: "run this over the roads which will make them smooth"):
             // Flatten slope, edge 3 m, smooth edges, 3 passes; bridge pieces left alone
             int graded = 0;
             if (grade && made.Count > 0)
@@ -538,10 +544,9 @@ namespace CawPlus
                 catch (Exception ex) { Log.Error("Grading roads failed", ex); }
             }
 
-            string note = string.Format("Built {0} intersections, {1} road pieces and {2} of {3} bridges; joined {4} loose ends, capped {5} dead ends{6}{7}. CAW's Undo removes them all.",
+            string note = string.Format("Built {0} intersections, {1} road pieces and {2} of {3} bridges; joined {4} loose ends, capped {5} dead ends{6}. CAW's Undo removes them all.",
                 inters, splines, bridgesBuilt, spans.Count, snapped, caps,
-                net.Paths.Count > 0 ? string.Format("; {0} footpaths ({1} pieces)", paths, pathPieces) : "",
-                failed + pathFailed > 0 ? " (" + (failed + pathFailed) + " failed, see log)" : "");
+                failed > 0 ? " (" + failed + " failed, see log)" : "");
             if (graded > 0) note += " Graded " + graded + " road objects with CAW's grading tool (a separate undo step).";
             if (spans.Count > 0 && bridgeItem == null) note += " No road bridge object was found in the catalog (needs Supernatural's bridges), so roads stop at the water.";
             Log.Info("Roads: " + note);
@@ -583,7 +588,7 @@ namespace CawPlus
                 made.Count, hidden, sets, Caw.Call(terr, "GetRoadTextureIdx")));
         }
 
-        internal static float CrowdDeg = 55f;   // two roads closer than this at a junction: one is moved into its own T
+        private const float CrowdDeg = 55f;   // two roads closer than this at a junction: one is moved into its own T
         private const float StubLength = 18f; // metres from a bridge end to the intersection placed past it
 
         /// <summary>
@@ -617,10 +622,6 @@ namespace CawPlus
             return pts;
         }
 
-        /// <summary>
-        /// Unit direction of travel at one end of a polyline, from the end to the point 'dist' metres along it
-        /// (at the start), or from that point to the end (at the end).
-        /// </summary>
         /// <summary>The direction a road leaves its start (or end), measured 20 m along it.</summary>
         private static float[] Leaving(List<float[]> r, bool atStart)
         {
@@ -661,6 +662,10 @@ namespace CawPlus
         // how strongly a junction stays put (per m², against 1 per m² off each road's line); its furthest move (m)
         private const float JunctionHold = 0.05f, JunctionShift = 10f;
 
+        /// <summary>
+        /// Unit direction of travel at one end of a polyline, from the end to the point 'dist' metres along it
+        /// (at the start), or from that point to the end (at the end).
+        /// </summary>
         private static float[] DirAlong(List<float[]> r, bool atStart, float dist)
         {
             int n = r.Count;
@@ -678,7 +683,7 @@ namespace CawPlus
                 }
                 acc += d;
             }
-            return atStart ? Dir(r[0], r[n - 1]) : Dir(r[0], r[n - 1]);
+            return Dir(r[0], r[n - 1]); // not reached: the loop returns at its last step
         }
 
         /// <summary>
@@ -733,33 +738,17 @@ namespace CawPlus
             return (float)(Math.Acos(d) * 180 / Math.PI);
         }
 
-        /// <summary>
-        /// The planned lots as CAW lots (Caw.CreateLot = CAW's Place Lot tool), in one undo step: residential, or
-        /// community (a beach by the water, else parks, library, gym, shops, restaurant, pool, graveyard in turn).
-        /// Run after Build roads: CAW refuses a lot on a road, so they go in once the roads are there.
-        /// CAW only adds a lot to the active World Layer, never the Global Layer (WorldLayersControl.AddLot, decompiled:
-        /// "Please add a new Layer before adding a lot"), so residential lots go into a "Residential Lots" layer and
-        /// community lots into "Commercial Lots", made if missing (EA's worlds keep their lots in their own layers too).
-        /// </summary>
         public const string ResidentialLayer = "Residential Lots", CommercialLayer = "Commercial Lots";
-
-        public static string BuildLots(object world, TerrainInfo ti, RoadNet net, ProgressFn progress)
-        {
-            string note;
-            List<LotPlacement> lots = FitLots(world, ti, net, true, out note);
-            return PlaceFitted(world, lots, progress) + note;
-        }
 
         /// <summary>A lot ready for CAW: its four corners in world x/z (front edge 0 -> 1), type and community subtype.</summary>
         internal sealed class LotPlacement { public float[][] World; public bool Community; public uint Sub; }
 
         /// <summary>
         /// The planned lots in world coordinates, community subtypes chosen (by the lot's kind, KindSubtypes; a lot with
-        /// no kind: a beach by the water, else parks, library, gym, shops, restaurant, pool, graveyard in turn) and, with
-        /// 'snap', each fitted to the road CAW actually built
-        /// (LotPlanner.SnapToRoads): front edge parallel to a straight stretch of it, 6 m from its centre line.
+        /// no kind: a beach by the water, else parks, library, gym, shops, restaurant, pool, graveyard in turn) and each
+        /// fitted to the road CAW actually built (LotPlanner.SnapToRoads): front edge parallel to a straight stretch of it, 6 m from its centre line.
         /// </summary>
-        public static List<LotPlacement> FitLots(object world, TerrainInfo ti, RoadNet net, bool snap, out string note)
+        public static List<LotPlacement> FitLots(object world, TerrainInfo ti, RoadNet net, out string note)
         {
             uint[] community = { 5, 9, 10, 16, 15, 6, 8, 7 }; // small park, library, gym, small shop, restaurant, big park, pool, graveyard
             int ci = 0;
@@ -796,7 +785,7 @@ namespace CawPlus
                 list.Add(p);
             }
             note = "";
-            if (!snap || list.Count == 0) return list;
+            if (list.Count == 0) return list;
             List<float[]> built = Caw.RoadSplines(world);
             List<float[][]> rects = new List<float[][]>();
             foreach (LotPlacement p in list) rects.Add(p.World);
@@ -849,7 +838,9 @@ namespace CawPlus
                 for (int i = 1; i < civic.Count; i++) if (big == null || civic[i].Width * civic[i].Depth > big.Width * big.Depth) big = civic[i];
                 sub[big] = 20;
             }
-            uint[] rh = { 18, 19, 17, 15, 14, 16 };
+            // base-game subtypes only (no pack needed): hospital, police station, theatre, science lab, big shop,
+            // military base, restaurant, day spa, small shop (Sims3.SimIFace.CommercialLotSubType, decompiled)
+            uint[] rh = { 18, 47, 19, 45, 17, 48, 15, 14, 16 };
             int k = 0;
             foreach (PlannedLot l in civic) if (!sub.ContainsKey(l)) sub[l] = rh[k++ % rh.Length];
             uint[] ven = { 9, 10, 11, 15, 16 };
@@ -858,8 +849,13 @@ namespace CawPlus
             return sub;
         }
 
-        /// <summary>Lots in CAW (Caw.CreateLot = CAW's Place Lot tool), in one undo step, residential into the
-        /// "Residential Lots" World Layer and community lots into "Commercial Lots".</summary>
+        /// <summary>
+        /// The lots (from FitLots) as CAW lots (Caw.CreateLot = CAW's Place Lot tool), in one undo step.
+        /// Run after Build roads: CAW refuses a lot on a road, so they go in once the roads are there.
+        /// CAW only adds a lot to the active World Layer, never the Global Layer (WorldLayersControl.AddLot, decompiled:
+        /// "Please add a new Layer before adding a lot"), so residential lots go into a "Residential Lots" layer and
+        /// community lots into "Commercial Lots", made if missing (EA's worlds keep their lots in their own layers too).
+        /// </summary>
         public static string PlaceFitted(object world, List<LotPlacement> lots, ProgressFn progress)
         {
             int made = 0, refused = 0, k = 0, madeRes = 0, madeCom = 0;
@@ -1037,8 +1033,6 @@ namespace CawPlus
             return pts[Math.Max(0, Math.Min(n - 1, i))];
         }
 
-        /// <summary>Of the roads at a junction with more than 4, the shorter of the two closest in direction is cut back
-        /// and joined to the other one 30 m out (split there). False if no pair is long enough.</summary>
         /// <summary>The smallest angle (radians) between two roads leaving a junction, measured 20 m out.</summary>
         private static float ClosestPair(List<List<float[]>> roads, Node n)
         {
@@ -1055,6 +1049,8 @@ namespace CawPlus
             return best;
         }
 
+        /// <summary>Of the roads at a junction with more than 4, the shorter of the two closest in direction is cut back
+        /// and joined to the other one 30 m out (split there). False if no pair is long enough.</summary>
         private static bool MoveFifthRoad(List<List<float[]>> roads, Node n, float limit)
         {
             int c = n.Ends.Count;
@@ -1244,10 +1240,6 @@ namespace CawPlus
             return best;
         }
 
-        /// <summary>
-        /// The port of a node's intersection for each of its roads, chosen together so the sum of squared angles between
-        /// roads and their ports is least (one at a time, a late road could be left a port 90° off). Key: road * 2 + start.
-        /// </summary>
         // angle (deg) between each road end and the junction port it is joined to, for the log (#134: a road meeting its
         // port off-square bends into it, and two such bends between near junctions make an S)
         private static readonly List<float> PortMisfit = new List<float>();
@@ -1260,6 +1252,10 @@ namespace CawPlus
             return string.Format("{0} road ends at junctions, off their port: mean {1:F1} deg, p90 {2:F1} deg, over 15 deg {3}", v.Count, sum / v.Count, v[(int)(v.Count * 0.9)], over);
         }
 
+        /// <summary>
+        /// The port of a node's intersection for each of its roads, chosen together so the sum of squared angles between
+        /// roads and their ports is least (one at a time, a late road could be left a port 90° off). Key: road * 2 + start.
+        /// </summary>
         private static Dictionary<int, int> AssignPorts(List<List<float[]>> roads, Node n)
         {
             int pc = n.Used.Length, c = n.Ends.Count;
@@ -1471,29 +1467,41 @@ namespace CawPlus
                     if (d < bd) { bd = d; pick = ri; }
                 }
             if (pick < 0) return false;
+            List<float[]> r = roads[pick];
+            int first = -1, last = -1;
+            for (int k = 0; k < r.Count; k++)
             {
-                int ri = pick;
-                List<float[]> r = roads[ri];
-                int first = -1, last = -1;
-                for (int k = 0; k < r.Count; k++)
-                {
-                    float dx = r[k][0] - sp.Mid[0], dz = r[k][1] - sp.Mid[1];
-                    float along = dx * sp.Dir[0] + dz * sp.Dir[1], side = Math.Abs(-dx * sp.Dir[1] + dz * sp.Dir[0]);
-                    if (Math.Abs(along) < BridgeLength / 2 && side < 12) { if (first < 0) first = k; last = k; }
-                }
-                if (first < 0) return false;
-                List<float[]> before = r.GetRange(0, first), after = r.GetRange(last + 1, r.Count - last - 1);
-                // which bridge end each piece meets (judged from whichever piece exists)
-                float[] endBefore, endAfter;
-                if (before.Count > 0) endBefore = D2(before[before.Count - 1], sp.EndA) < D2(before[before.Count - 1], sp.EndB) ? sp.EndA : sp.EndB;
-                else endBefore = after.Count > 0 && D2(after[0], sp.EndA) < D2(after[0], sp.EndB) ? sp.EndB : sp.EndA;
-                endAfter = endBefore == sp.EndA ? sp.EndB : sp.EndA;
-                before.Add(endBefore); after.Insert(0, endAfter);
-                roads.RemoveAt(ri);
-                if (before.Count >= 2) roads.Add(before);
-                if (after.Count >= 2) roads.Add(after);
-                return true;
+                float dx = r[k][0] - sp.Mid[0], dz = r[k][1] - sp.Mid[1];
+                float along = dx * sp.Dir[0] + dz * sp.Dir[1], side = Math.Abs(-dx * sp.Dir[1] + dz * sp.Dir[0]);
+                if (Math.Abs(along) < sp.Length / 2 && side < 12) { if (first < 0) first = k; last = k; }
             }
+            if (first < 0) return false;
+            List<float[]> before = r.GetRange(0, first), after = r.GetRange(last + 1, r.Count - last - 1);
+            // which bridge end each piece meets (judged from whichever piece exists)
+            float[] endBefore, endAfter;
+            if (before.Count > 0) endBefore = D2(before[before.Count - 1], sp.EndA) < D2(before[before.Count - 1], sp.EndB) ? sp.EndA : sp.EndB;
+            else endBefore = after.Count > 0 && D2(after[0], sp.EndA) < D2(after[0], sp.EndB) ? sp.EndB : sp.EndA;
+            endAfter = endBefore == sp.EndA ? sp.EndB : sp.EndA;
+            before.Add(endBefore); after.Insert(0, endAfter);
+            roads.RemoveAt(pick);
+            if (before.Count >= 2) roads.Add(before);
+            if (after.Count >= 2) roads.Add(after);
+            return true;
+        }
+
+        /// <summary>A given bridge type's object: from the catalog by instance, else by its key (the pack may be missing:
+        /// then null, and the default bridge is used).</summary>
+        internal static Caw.CatalogItem FindBridge(BridgeType t)
+        {
+            try
+            {
+                string hex = t.Instance.ToString("x16");
+                foreach (Caw.CatalogItem c in Caw.Catalog())
+                    if (c.InstanceHex == hex) { Log.Info("Bridge object: " + c.Name + " (catalog, the world type's own)"); return c; }
+                Log.Info("Bridge object: " + t.Name + " by instance (not listed in the catalog panel)");
+                return Caw.ObjectByInstance(t.Name, t.Instance, t.Group);
+            }
+            catch (Exception ex) { Log.Error("Finding bridge " + t.Name + " failed", ex); return null; }
         }
 
         /// <summary>A road bridge object: from the catalog if it lists one, else EA's EP7 bridges by instance.</summary>

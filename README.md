@@ -1,12 +1,13 @@
 # CAW Plus
 
-By fjordyguy, made with Claude. Version 1.0.0.
+By fjordyguy, made with Claude. Version 1.3.3.
 
 CAW Plus adds tools to The Sims 3 **Create a World Tool (CAW)** that build most of a world for you, in the style of EA's own worlds:
 
 | Tool | What it does |
 |---|---|
 | **Generate Terrain** | Makes the land: hills, mountains, rivers, coasts and lakes |
+| **World Builder** | Draw your own world in squares (grass, hills, mountains, sea, lakes, rivers, roads, town) and it builds the land from them |
 | **Generate Roads** | Plans and builds the roads, bridges and lots |
 | **Footpaths** | Adds footpaths round the roads |
 | **Auto-Paint** | Paints the terrain (grass, rock, dirt, sand) in one click |
@@ -38,7 +39,7 @@ The tools are on a new **CAW Plus** tab next to CAW's Terrain tab, in the order 
 
 Click **Create World** (CAW Plus tab) to be guided through these steps, or use the tools one by one:
 
-1. **Generate Terrain**: make the land.
+1. **Generate Terrain** (or **World Builder**): make the land.
 2. **Generate Roads**: build the roads, then place the lots.
 3. **Footpaths**
 4. **Auto-Paint**
@@ -60,11 +61,15 @@ Click **Create World** (CAW Plus tab) to be guided through these steps, or use t
 3. Change the sliders or click **New map** until you like the preview. **3D view**: drag to turn, right-drag to move, mouse wheel to zoom, double-click to reset; the key in the corner shows the scale (road, lot, car, Sim). **Colours** shows the map in green, desert or the world type's own paint colours.
 4. Click **Apply terrain**. **Undo terrain** puts the old land back.
 
+### World Builder
+
+An alternative to Generate Terrain: paint squares of grass, hills, mountains, forest, lake, sea, river, road, bridge, town centre, houses, park or beach, then click **Create** to see the land and **Apply to world**. Nothing is built that you didn't draw: Generate Roads then lays only the roads you painted. **From this world** fills the squares from the land you already have; **Undo/Redo** with Ctrl+Z / Ctrl+Y.
+
 ### Generate Roads
 
 1. Plans roads and lots for the land you have, like the chosen World type's town (downtown grid, neighbourhoods, country roads). **New layout** tries another.
 2. **Build roads** lays them in CAW, with bridges over narrow water and end caps on dead ends. The ground under the roads is smoothed first.
-3. **Place lots** puts the lots along the roads, with level pads on hillsides.
+3. **Place lots** puts the lots along the roads, with level pads on hillsides. Neighbourhoods get space between them and their own ground heights, as in EA's towns.
 
 **Road look** chooses the road texture. CAW's Undo removes the roads and lots.
 

@@ -15,7 +15,7 @@ namespace CawPlus
     {
         public const uint OBJD = 0x319E4F1D, OBJK = 0x02DC343F, VPXY = 0x736884F1, MODL = 0x01661233, MLOD = 0x01D10F34,
             MATD = 0x01D0E75D, VRTF = 0x01D0E723, VBUF = 0x01D0E6FB, IBUF = 0x01D0E70F, DDS = 0x00B2D882,
-            FTPT = 0xD382BF57, LITE = 0x03B4C61D, NMAP = 0x0166038C;
+            FTPT = 0xD382BF57, LITE = 0x03B4C61D;
 
         /// <summary>FNV-1 64 of the lower-case name (EA's resource instance hash).</summary>
         public static ulong Fnv64(string s)

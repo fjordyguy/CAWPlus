@@ -1,9 +1,7 @@
 using System;
 using System.Drawing;
-using System.Drawing.Imaging;
 using System.IO;
 using System.IO.Compression;
-using System.Runtime.InteropServices;
 
 namespace CawPlus
 {
@@ -16,36 +14,16 @@ namespace CawPlus
         /// </summary>
         public static void WriteGrayPng(Grid g, string path)
         {
-            int w = g.W, h = g.H;
-            using (FileStream fs = File.Create(path))
+            int w = g.W;
+            WritePng(path, w, g.H, 8, 2, 3, delegate (int y, byte[] row) // 8-bit RGB
             {
-                fs.Write(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }, 0, 8);
-                byte[] ihdr = new byte[13];
-                PutBE32(ihdr, 0, w); PutBE32(ihdr, 4, h);
-                ihdr[8] = 8; ihdr[9] = 2; // 8-bit RGB
-                Chunk(fs, "IHDR", ihdr);
-                MemoryStream z = new MemoryStream();
-                z.WriteByte(0x78); z.WriteByte(0x01);
-                uint a = 1, b2 = 0;
-                byte[] row = new byte[1 + w * 3];
-                using (DeflateStream ds = new DeflateStream(z, CompressionMode.Compress, true))
-                    for (int y = 0; y < h; y++)
-                    {
-                        row[0] = 0; // filter: none
-                        for (int x = 0; x < w; x++)
-                        {
-                            float v = g.D[y * w + x] * 255f + 0.5f;
-                            byte c = (byte)(v < 0 ? 0 : (v > 255 ? 255 : v));
-                            row[1 + x * 3] = c; row[2 + x * 3] = c; row[3 + x * 3] = c;
-                        }
-                        ds.Write(row, 0, row.Length);
-                        for (int i = 0; i < row.Length; i++) { a = (a + row[i]) % 65521; b2 = (b2 + a) % 65521; }
-                    }
-                uint adler = (b2 << 16) | a;
-                z.WriteByte((byte)(adler >> 24)); z.WriteByte((byte)(adler >> 16)); z.WriteByte((byte)(adler >> 8)); z.WriteByte((byte)adler);
-                Chunk(fs, "IDAT", z.ToArray());
-                Chunk(fs, "IEND", new byte[0]);
-            }
+                for (int x = 0; x < w; x++)
+                {
+                    float v = g.D[y * w + x] * 255f + 0.5f;
+                    byte c = (byte)(v < 0 ? 0 : (v > 255 ? 255 : v));
+                    row[1 + x * 3] = c; row[2 + x * 3] = c; row[3 + x * 3] = c;
+                }
+            });
         }
 
         /// <summary>
@@ -54,36 +32,44 @@ namespace CawPlus
         /// </summary>
         public static void WriteGray16Png(Grid g, string path)
         {
-            int w = g.W, h = g.H;
-            MemoryStream raw = new MemoryStream();
-            byte[] row = new byte[1 + w * 2];
-            for (int y = 0; y < h; y++)
+            int w = g.W;
+            WritePng(path, w, g.H, 16, 0, 2, delegate (int y, byte[] row) // 16-bit grey, big-endian
             {
-                row[0] = 0; // filter: none
                 for (int x = 0; x < w; x++)
                 {
                     float v = g.D[y * w + x];
                     int q = (int)(Math.Max(0f, Math.Min(1f, v)) * 65535f + 0.5f);
                     row[1 + x * 2] = (byte)(q >> 8); row[2 + x * 2] = (byte)q;
                 }
-                raw.Write(row, 0, row.Length);
-            }
-            byte[] data = raw.ToArray();
-            MemoryStream z = new MemoryStream();
-            z.WriteByte(0x78); z.WriteByte(0x01);
-            using (DeflateStream ds = new DeflateStream(z, CompressionMode.Compress, true)) ds.Write(data, 0, data.Length);
-            uint a = 1, b = 0;
-            for (int i = 0; i < data.Length; i++) { a = (a + data[i]) % 65521; b = (b + a) % 65521; }
-            uint adler = (b << 16) | a;
-            z.WriteByte((byte)(adler >> 24)); z.WriteByte((byte)(adler >> 16)); z.WriteByte((byte)(adler >> 8)); z.WriteByte((byte)adler);
+            });
+        }
 
+        private delegate void RowFill(int y, byte[] row);
+
+        /// <summary>PNG with one IDAT, rows (filter none) filled by 'fill' and deflated as they're made.</summary>
+        private static void WritePng(string path, int w, int h, byte depth, byte colourType, int bytesPerPixel, RowFill fill)
+        {
             using (FileStream fs = File.Create(path))
             {
                 fs.Write(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }, 0, 8);
                 byte[] ihdr = new byte[13];
                 PutBE32(ihdr, 0, w); PutBE32(ihdr, 4, h);
-                ihdr[8] = 16; ihdr[9] = 0; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
+                ihdr[8] = depth; ihdr[9] = colourType;
                 Chunk(fs, "IHDR", ihdr);
+                MemoryStream z = new MemoryStream();
+                z.WriteByte(0x78); z.WriteByte(0x01);
+                uint a = 1, b2 = 0;
+                byte[] row = new byte[1 + w * bytesPerPixel];
+                using (DeflateStream ds = new DeflateStream(z, CompressionMode.Compress, true))
+                    for (int y = 0; y < h; y++)
+                    {
+                        row[0] = 0; // filter: none
+                        fill(y, row);
+                        ds.Write(row, 0, row.Length);
+                        for (int i = 0; i < row.Length; i++) { a = (a + row[i]) % 65521; b2 = (b2 + a) % 65521; }
+                    }
+                uint adler = (b2 << 16) | a;
+                z.WriteByte((byte)(adler >> 24)); z.WriteByte((byte)(adler >> 16)); z.WriteByte((byte)(adler >> 8)); z.WriteByte((byte)adler);
                 Chunk(fs, "IDAT", z.ToArray());
                 Chunk(fs, "IEND", new byte[0]);
             }

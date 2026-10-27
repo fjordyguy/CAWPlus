@@ -29,11 +29,11 @@ namespace CawPlus
         // bands (lo, hi) for the measures this region checks; NaN = not checked
         public float[] OrderBand, ElongBand, CoastBand, RingBand;
         public bool Motorway;                          // a road right across the map beside the town, the town joined to it (Lucky Palms)
-        public bool CoastPull, Linear, RingRoad, ShoreRoad; // planner hints: roads drawn towards the shore; no round loops; a ring road; a road along the coast through town
+        public bool CoastPull, Linear, ShoreRoad; // planner hints: roads drawn towards the shore; no round loops; a road along the coast through town
 
         private sealed class Def
         {
-            public string Key, Text; public float[] Order, Elong, Coast, Ring; public bool CoastPull, Linear, RingRoad, ShoreRoad, Motorway;
+            public string Key, Text; public float[] Order, Elong, Coast, Ring; public bool CoastPull, Linear, ShoreRoad, Motorway;
             public Def(string key, string text) { Key = key; Text = text; }
         }
 
@@ -54,7 +54,7 @@ namespace CawPlus
             d = new Def("iceland-fjord", "Icelandic coastal town: strung along the shore and one main road, a small core, no grid");
             d.Coast = new[] { 0.5f, 0.95f }; d.Elong = new[] { 0.25f, 0.7f }; d.CoastPull = true; d.Linear = true; d.ShoreRoad = true; l.Add(d);
             d = new Def("pacific-ring", "Volcanic Pacific island: one road round the island by the shore (Rarotonga's Ara Tapu), none over the mountain");
-            d.Coast = new[] { 0.55f, 0.95f }; d.Ring = new[] { 0.85f, 1f }; d.CoastPull = true; d.RingRoad = true; l.Add(d);
+            d.Coast = new[] { 0.55f, 0.95f }; d.Ring = new[] { 0.85f, 1f }; d.CoastPull = true; l.Add(d);
             d = new Def("island-coastal", "Tropical islands: roads follow each island's shore, irregular, no grid");
             d.Coast = new[] { 0.45f, 0.9f }; d.Order = new[] { 0f, 0.2f }; d.CoastPull = true; d.ShoreRoad = true; l.Add(d);
             d = new Def("harbour-village", "Old harbour town: narrow winding streets, a waterfront street to the harbour");
@@ -74,14 +74,6 @@ namespace CawPlus
             return l;
         }
 
-        /// <summary>The names of the regions, for worlds.txt and the log.</summary>
-        public static string[] RegionNames()
-        {
-            string[] a = new string[Regions.Count];
-            for (int i = 0; i < a.Length; i++) a[i] = Regions[i].Key;
-            return a;
-        }
-
         /// <summary>
         /// The target for a world: region (worlds.txt column 37) and the EA world's measured figures (roadgeo json text,
         /// may be null). Null if the region is unknown.
@@ -93,7 +85,7 @@ namespace CawPlus
             foreach (Def q in Regions) if (string.Equals(q.Key, region.Trim(), StringComparison.OrdinalIgnoreCase)) d = q;
             if (d == null) return null;
             RoadCharacter c = new RoadCharacter();
-            c.Region = d.Key; c.Description = d.Text; c.CoastPull = d.CoastPull; c.Linear = d.Linear; c.RingRoad = d.RingRoad; c.ShoreRoad = d.ShoreRoad; c.Motorway = d.Motorway;
+            c.Region = d.Key; c.Description = d.Text; c.CoastPull = d.CoastPull; c.Linear = d.Linear; c.ShoreRoad = d.ShoreRoad; c.Motorway = d.Motorway;
             float mo = Num(measuredJson, "order"), me = Num(measuredJson, "elongation"), mc = Num(measuredJson, "coast"), mg = Num(measuredJson, "ring");
             c.OrderBand = Centre(d.Order, mo); c.ElongBand = Centre(d.Elong, me);
             c.CoastBand = Centre(d.Coast, mc); c.RingBand = Centre(d.Ring, mg);
@@ -202,25 +194,7 @@ namespace CawPlus
             }
             // by the sea: within 80 m of water (chamfer distance on the heights grid)
             int n2 = h.W;
-            float[] dist = new float[n2 * n2];
-            for (int i = 0; i < dist.Length; i++) dist[i] = h.D[i] < sea ? 0 : 1e9f;
-            float d1 = cell, dd = cell * 1.4142f;
-            for (int y = 0; y < n2; y++)
-                for (int x = 0; x < n2; x++)
-                {
-                    int i = y * n2 + x; float v = dist[i];
-                    if (x > 0) v = Math.Min(v, dist[i - 1] + d1);
-                    if (y > 0) { v = Math.Min(v, dist[i - n2] + d1); if (x > 0) v = Math.Min(v, dist[i - n2 - 1] + dd); if (x < n2 - 1) v = Math.Min(v, dist[i - n2 + 1] + dd); }
-                    dist[i] = v;
-                }
-            for (int y = n2 - 1; y >= 0; y--)
-                for (int x = n2 - 1; x >= 0; x--)
-                {
-                    int i = y * n2 + x; float v = dist[i];
-                    if (x < n2 - 1) v = Math.Min(v, dist[i + 1] + d1);
-                    if (y < n2 - 1) { v = Math.Min(v, dist[i + n2] + d1); if (x < n2 - 1) v = Math.Min(v, dist[i + n2 + 1] + dd); if (x > 0) v = Math.Min(v, dist[i + n2 - 1] + dd); }
-                    dist[i] = v;
-                }
+            float[] dist = LandChecklist.Distance(delegate (int i) { return h.D[i] < sea; }, h.W, h.H, cell);
             double coast = 0;
             bool[] ring = new bool[36];
             foreach (float[] s in segs)

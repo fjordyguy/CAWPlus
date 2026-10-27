@@ -170,24 +170,7 @@ namespace CawPlus
                 int[] nb = { x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, y > 0 ? i - w : -1, y < n - 1 ? i + w : -1 };
                 foreach (int j in nb) if (j >= 0 && h.D[j] < sl && d[j] > 0) { d[j] = 0; q.Enqueue(j); }
             }
-            float d1 = cell, d2 = cell * 1.4142f;
-            for (int y = 0; y < n; y++)
-                for (int x = 0; x < w; x++)
-                {
-                    int i = y * w + x; float v = d[i];
-                    if (x > 0) v = Math.Min(v, d[i - 1] + d1);
-                    if (y > 0) { v = Math.Min(v, d[i - w] + d1); if (x > 0) v = Math.Min(v, d[i - w - 1] + d2); if (x < w - 1) v = Math.Min(v, d[i - w + 1] + d2); }
-                    d[i] = v;
-                }
-            for (int y = n - 1; y >= 0; y--)
-                for (int x = w - 1; x >= 0; x--)
-                {
-                    int i = y * w + x; float v = d[i];
-                    if (x < w - 1) v = Math.Min(v, d[i + 1] + d1);
-                    if (y < n - 1) { v = Math.Min(v, d[i + w] + d1); if (x < w - 1) v = Math.Min(v, d[i + w + 1] + d2); if (x > 0) v = Math.Min(v, d[i + w - 1] + d2); }
-                    d[i] = v;
-                }
-            return d;
+            return LandChecklist.Distance(delegate (int i) { return d[i] == 0; }, w, n, cell);
         }
 
         private static float Dist(float[] a, float[] b) { return (float)Math.Sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1])); }

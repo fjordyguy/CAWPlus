@@ -73,8 +73,7 @@ namespace CawPlus
     {
         public string Name = "";
         public string Source = "";
-        public string BaseTexture = "";   // the world's base layer texture (EA styles), and how much of the world it shows
-        public float BaseShare;
+        public string BaseTexture = "";   // the world's base layer texture (EA styles)
         public readonly Dictionary<PaintRole, RoleStyle> Roles = new Dictionary<PaintRole, RoleStyle>();
 
         public static string Dir { get { return Path.Combine(Log.Dir, "Styles"); } }
@@ -212,7 +211,7 @@ namespace CawPlus
             StringBuilder sb = new StringBuilder();
             sb.AppendLine("name=" + Name);
             sb.AppendLine("source=" + Source);
-            if (BaseTexture.Length > 0) sb.AppendLine("base=" + BaseTexture + "|" + F(BaseShare));
+            if (BaseTexture.Length > 0) sb.AppendLine("base=" + BaseTexture);
             foreach (KeyValuePair<PaintRole, RoleStyle> kv in Roles)
             {
                 RoleStyle r = kv.Value;
@@ -254,7 +253,7 @@ namespace CawPlus
                 {
                     case "name": p.Name = v; break;
                     case "source": p.Source = v; break;
-                    case "role": cur = new RoleStyle(); p.Roles[(PaintRole)Enum.Parse(typeof(PaintRole), v)] = cur; break;
+                    case "role": cur = new RoleStyle(); p.Roles[LibraryText.EnumOf<PaintRole>(v)] = cur; break;
                     case "cover": cur.Cover = P(v); break;
                     case "patch": cur.PatchMeters = P(v); break;
                     case "soft": cur.Softness = P(v); break;
@@ -271,7 +270,6 @@ namespace CawPlus
                         {
                             int bar = v.LastIndexOf('|');
                             p.BaseTexture = bar > 0 ? v.Substring(0, bar) : v;
-                            if (bar > 0) p.BaseShare = P(v.Substring(bar + 1));
                         }
                         break;
                 }
@@ -329,8 +327,12 @@ namespace CawPlus
         public float Match;      // 0..100
         public int Passes;
 
-        public StyledGenerator(StyleProfile style, Grid h, float cell, float water, Grid waterOffset, int seed, ICollection<PaintRole> roles)
+        public StyledGenerator(StyleProfile style, Grid h, float cell, float water, Grid waterOffset, int seed, ICollection<PaintRole> roles, float detail = 50)
         {
+            // the Detail slider sets the size of the fine break-up (50 = 1x; 100 = 0.6x, 0 = 1.4x); never under ~3 m, the
+            // size CAW's 1 m paint maps draw as hard flecks (the tester's 2026-10-26 test: max detail looked blocky)
+            float ds = 1.4f - Math.Max(0, Math.Min(100, detail)) * 0.008f;
+            float fineM = Math.Max(4f, 6f * ds), edgeM = Math.Max(3f, 3.5f * ds);
             this.style = style;
             this.cell = Math.Max(cell, 1e-3f);
             f = new TerrainFeatures(h, cell, water, waterOffset);
@@ -344,10 +346,14 @@ namespace CawPlus
                 Grid n = Grid.Fbm(h.W, h.H, patch * 1.5f * px, 4, new Random(rng.Next()));
                 // fine detail inside the learned patches (5 m and 2.5 m), so edges are intricate, not smooth blobs;
                 // equalised again, so coverage stays exact
-                Grid fineN = Grid.Fbm(h.W, h.H, 5f * px, 3, new Random(rng.Next()));
-                Grid edgeN = Grid.Fbm(h.W, h.H, 2.5f * px, 2, new Random(rng.Next()));
+                // (a pattern under two cells can't be drawn: on the preview's coarse grid it came out as random speckle,
+                // so the preview showed detail the painted map doesn't have; such a part is left out there)
+                float wf = fineM * px >= 2 ? 0.2f : 0, we = edgeM * px >= 2 ? 0.1f : 0;
+                Grid fineN = Grid.Fbm(h.W, h.H, Math.Max(2f, fineM * px), 3, new Random(rng.Next()));
+                Grid edgeN = Grid.Fbm(h.W, h.H, Math.Max(2f, edgeM * px), 2, new Random(rng.Next()));
                 Equalize(n); Equalize(fineN); Equalize(edgeN);
-                for (int i = 0; i < n.D.Length; i++) n.D[i] = 0.7f * n.D[i] + 0.2f * fineN.D[i] + 0.1f * edgeN.D[i];
+                float wn = 1 - wf - we;
+                for (int i = 0; i < n.D.Length; i++) n.D[i] = wn * n.D[i] + wf * fineN.D[i] + we * edgeN.D[i];
                 // follow the land's small shapes (gullies, hollows, ridges): roles the style finds more in hollows are
                 // drawn into them, roles found on ridges onto those (Bridgewood's and EA's paint follows every gully;
                 // the tester's v0.40 test: Auto-Paint looked like blobs laid over the land)
@@ -364,15 +370,6 @@ namespace CawPlus
                 gains[r] = new[] { Ones(TerrainFeatures.SlopeEdges.Length + 1), Ones(TerrainFeatures.HeightEdges.Length + 1),
                                    Ones(TerrainFeatures.CurvEdges.Length + 1) };
             }
-        }
-
-        /// <summary>Seeds this generator's corrections from an earlier fit (e.g. the preview), so full resolution starts close.</summary>
-        public void CopyGainsFrom(StyledGenerator other)
-        {
-            if (other == null) return;
-            foreach (KeyValuePair<PaintRole, float[][]> kv in other.gains)
-                if (gains.ContainsKey(kv.Key))
-                    for (int t = 0; t < 3; t++) Array.Copy(kv.Value[t], gains[kv.Key][t], kv.Value[t].Length);
         }
 
         /// <summary>The corrections as text (role, then the slope / height / hollow gains), to pass to CAWPlusHelper.</summary>
@@ -400,7 +397,7 @@ namespace CawPlus
                 string[] p = line.Split(';');
                 if (p.Length != 4) continue;
                 PaintRole r;
-                try { r = (PaintRole)Enum.Parse(typeof(PaintRole), p[0]); } catch { continue; }
+                try { r = LibraryText.EnumOf<PaintRole>(p[0]); } catch { continue; }
                 float[][] g;
                 if (!gains.TryGetValue(r, out g)) continue;
                 for (int t = 0; t < 3; t++)
@@ -414,7 +411,6 @@ namespace CawPlus
 
         private static float[] Ones(int n) { float[] a = new float[n]; for (int i = 0; i < n; i++) a[i] = 1; return a; }
 
-        /// <summary>Histogram-equalise to a uniform 0..1 distribution, so "paint where noise &lt; p" covers share p.</summary>
         public const float ShapeWeight = 0.4f; // how strongly paint follows the land's small hollows and ridges (0-1)
 
         /// <summary>
@@ -455,6 +451,7 @@ namespace CawPlus
             return (float)Math.Max(-1, Math.Min(1, Math.Log(a / c)));
         }
 
+        /// <summary>Histogram-equalise to a uniform 0..1 distribution, so "paint where noise &lt; p" covers share p.</summary>
         private static void Equalize(Grid g)
         {
             const int B = 4096;
@@ -516,7 +513,7 @@ namespace CawPlus
                     }
                 // feathered edges in metres (a brush's soft falloff), wider for soft styles and with the Softness slider;
                 // a blur keeps the texture's total coverage
-                float feather = FeatherMeters * softness * (0.4f + rs.Softness);
+                float feather = Math.Max(1.5f, FeatherMeters * softness * (0.4f + rs.Softness));
                 if (feather / cell >= 0.5f) masks[r] = m.Blur(feather / cell);
             }
             return masks;
@@ -575,22 +572,21 @@ namespace CawPlus
             return (float)(full + ramp);
         }
 
-        /// <summary>
-        /// Generates in passes, correcting each role's share per slope / height / hollow bin towards the reference
-        /// world after each pass. Returns the final masks; Match is the similarity in percent.
-        /// </summary>
         // how each role's overall share of the map is matched to the reference world's (the band shares alone give more
         // or less of a texture where the terrain's mix of slopes and heights differs): 0 = not, 1 = a global gain step
         // after the band corrections, 2 = band targets scaled by the measured cover each pass. tools/Fidelity, all 22 EA
         // styles, seeds 7-8: 0 = 83.0 %, 1 (step ^0.6) = 86.3 %, 2 (^0.5) = 84.6 %, 2 (^0.3) = 83.5 %.
         public int CoverMode = 1;
         public double CoverPower = 0.6;
-        public bool MatchCover { get { return CoverMode != 0; } set { CoverMode = value ? 2 : 0; } }
 
+        /// <summary>
+        /// Generates in passes, correcting each role's share per slope / height / hollow bin towards the reference
+        /// world after each pass. Returns the final masks; Match is the similarity in percent.
+        /// </summary>
         public Dictionary<PaintRole, Grid> Fit(Dictionary<PaintRole, float> amount, float softness, int passes, ProgressFn progress)
         {
             Dictionary<PaintRole, Grid> masks = null;
-            // MatchCover: each role's band targets are scaled so that, on this terrain's own mix of slopes and heights,
+            // CoverMode 2: each role's band targets are scaled so that, on this terrain's own mix of slopes and heights,
             // the role covers as much of the map as in the reference world (the band shares alone give more or less of a
             // texture where the terrain differs). The scale follows the measured cover each pass; one goal for all
             // three corrections, so they don't pull against each other.

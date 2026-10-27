@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Windows.Forms;
 
 namespace CawPlus
 {
@@ -12,7 +11,6 @@ namespace CawPlus
         public float CellMeters;         // metres per paint-map pixel
         public int Orientation;          // 0..7 dihedral transform image(u,v) -> world(x,z)
         public float Origin;             // world coordinate of the map's first edge (0 or -WorldSize/2)
-        public float OrientationScore;   // correlation of the chosen mapping (1.0 = perfect)
         public float WaterLevel;         // sea level, metres
         public Grid WaterOffset;         // per pixel: pond surface minus sea level where a pond is higher (else 0); may be null
         public List<float[]> Ponds = new List<float[]>();
@@ -66,7 +64,7 @@ namespace CawPlus
 
             // 3. Orientation + origin: compare CAW's height image with live height queries.
             Report(progress, "Matching orientation", 10);
-            ti.Orientation = 0; ti.Origin = 0; ti.OrientationScore = 0;
+            ti.Orientation = 0; ti.Origin = 0;
             if (hImg != null)
             {
                 float[] origins = { 0f, -ti.WorldSize / 2f };
@@ -98,7 +96,6 @@ namespace CawPlus
                 // no real match (a flat new world reads 0.00): every world seen so far has origin 0 and orientation 0, and a
                 // guess of origin -1024 on such a world put half of Apply terrain's calibration samples off the map (#167)
                 if (best < 0.5) { ti.Orientation = 0; ti.Origin = 0; best = Math.Max(best, -1); }
-                ti.OrientationScore = (float)best;
                 Log.Info(string.Format("Orientation {0}, origin {1}, correlation {2:F3}", ti.Orientation, ti.Origin, best));
                 if (best < 0.9) ti.Notes += string.Format("Orientation match is weak ({0:F2}); check the preview against the CAW view. ", best);
             }
@@ -118,7 +115,7 @@ namespace CawPlus
                 if ((py & 31) == 0)
                 {
                     Report(progress, "Sampling terrain", 12 + (int)(80.0 * py / mapH));
-                    Application.DoEvents();
+                    Injector.Pump();
                 }
             }
             FixEdgeZeros(h);
@@ -208,18 +205,8 @@ namespace CawPlus
         /// <summary>Inverse of MapToWorld.</summary>
         public static void WorldToMap(TerrainInfo ti, float x, float z, out float mx, out float my)
         {
-            float wx = (x - ti.Origin) / ti.WorldSize, wz = (z - ti.Origin) / ti.WorldSize, u, v;
-            switch (ti.Orientation)
-            {
-                case 1: u = 1 - wx; v = wz; break;
-                case 2: u = wx; v = 1 - wz; break;
-                case 3: u = 1 - wx; v = 1 - wz; break;
-                case 4: u = wz; v = wx; break;
-                case 5: u = wz; v = 1 - wx; break;
-                case 6: u = 1 - wz; v = wx; break;
-                case 7: u = 1 - wz; v = 1 - wx; break;
-                default: u = wx; v = wz; break;
-            }
+            float wx = (x - ti.Origin) / ti.WorldSize, wz = (z - ti.Origin) / ti.WorldSize;
+            float u, v; Unmap(ti.Orientation, wx, wz, out u, out v);
             mx = u * ti.MapW; my = v * ti.MapH;
         }
 

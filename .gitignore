@@ -3,3 +3,15 @@ obj/
 *.user
 __pycache__/
 *.pyc
+# EA game files and raw data the offline tools read or write: never committed (statistics go in library/)
+*.world
+*.layer
+*.lot
+*.package
+*.Sims3Pack
+*.dds
+*.f32
+*.u8
+*.7z
+*.zip
+!builds/*.zip

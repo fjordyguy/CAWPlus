@@ -4,17 +4,52 @@ using System.Windows.Forms;
 
 namespace CawPlus
 {
-    /// <summary>Adds the CAW Plus buttons to CAW's Terrain toolbar once the main window exists.</summary>
+    /// <summary>Adds the CAW Plus tab (or, as a fallback, buttons on CAW's own toolbars) once the main window exists; opens the tool windows.</summary>
     internal static class Injector
     {
         // one CAW Plus action at a time: long actions pump messages (DoEvents), so another window's button could
         // otherwise start a second action whose undo steps would interleave with the first
         private static Form busyForm;
+        // the world the running action works on: CAW's own menus stay usable during it (never locked), so another world
+        // could be opened while the action still holds the first one (security review 2026-10-26)
+        private static object busyWorld;
+        private static string busyKey;
 
         public static void SetBusy(Form f, bool b)
         {
-            if (b) busyForm = f;
-            else if (busyForm == f) busyForm = null;
+            if (b)
+            {
+                busyForm = f;
+                try { busyWorld = Caw.CurrentWorld; busyKey = busyWorld != null ? Caw.WorldKey(busyWorld) : null; }
+                catch { busyWorld = null; busyKey = null; }
+            }
+            else if (busyForm == f) { busyForm = null; busyWorld = null; busyKey = null; }
+        }
+
+        /// <summary>True when a CAW Plus action is running and CAW now has a different world open than when it began.</summary>
+        public static bool WorldChanged
+        {
+            get
+            {
+                if (busyForm == null || busyWorld == null) return false;
+                try
+                {
+                    object now = Caw.CurrentWorld;
+                    if (ReferenceEquals(now, busyWorld)) return false;
+                    return now == null || Caw.WorldKey(now) != busyKey; // a new wrapper of the same world is not a change
+                }
+                catch { return false; }
+            }
+        }
+
+        /// <summary>
+        /// Lets CAW handle its messages during a long action (Application.DoEvents), then stops the action with
+        /// WorldChangedException if another world was opened meanwhile, before anything more is written.
+        /// </summary>
+        public static void Pump()
+        {
+            Application.DoEvents();
+            if (WorldChanged) throw new WorldChangedException();
         }
 
         /// <summary>True (with a beep) if another CAW Plus window is in the middle of an action.</summary>
@@ -41,6 +76,7 @@ namespace CawPlus
             switch (tool)
             {
                 case "terrain": ShowTerrainGen(owner); break;
+                case "builder": ShowWorldBuilder(owner); break;
                 case "roads": ShowRoads(owner); break;
                 case "paths": ShowFootpaths(owner); break;
                 case "paint": ShowAutoPaint(owner); break;
@@ -74,6 +110,26 @@ namespace CawPlus
         private static FootpathForm footpathForm;
         private static RoadsForm roadsForm;
         private static TerrainGenForm terrainGenForm;
+        private static WorldBuilderForm worldBuilderForm;
+
+        private static void ShowWorldBuilder(Form owner)
+        {
+            try
+            {
+                if (Caw.CurrentWorld == null)
+                {
+                    MessageBox.Show(owner, "Open a world first (File > New for a blank one).", "World Builder", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+                if (worldBuilderForm == null || worldBuilderForm.IsDisposed) { worldBuilderForm = new WorldBuilderForm(); worldBuilderForm.Show(owner); }
+                else worldBuilderForm.Activate();
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Opening World Builder failed", ex);
+                MessageBox.Show(owner, "World Builder failed to open:\n" + ex.Message, "World Builder", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
         private static DistantTerrainForm distantForm;
 
         /// <summary>
@@ -116,6 +172,7 @@ namespace CawPlus
             CawLook.Button(bar, "Create World", "Step by step from blank land to a finished world: opens each tool below in turn", true, delegate { ShowWizard(form); });
             bar.Items.Add(new ToolStripSeparator());
             CawLook.Button(bar, "1  Generate Terrain", "Step 1: hills, mountains, rivers, coasts and lakes like the chosen world type", true, delegate { ShowTerrainGen(form); });
+            CawLook.Button(bar, "1  or World Builder", "Step 1, your own way: paint the world in squares (hills, mountains, lakes, sea, rivers, roads, town, forest) and Create", true, delegate { ShowWorldBuilder(form); });
             CawLook.Button(bar, "2  Generate Roads", "Step 2: plan and build roads and bridges, then place the lots", true, delegate { ShowRoads(form); });
             CawLook.Button(bar, "3  Footpaths", "Step 3: footpaths round the roads already built", false, delegate { ShowFootpaths(form); });
             CawLook.Button(bar, "4  Auto-Paint", "Step 4: paint the whole terrain (grass, rock, dirt, sand) in one click", true, delegate { ShowAutoPaint(form); });
@@ -155,7 +212,7 @@ namespace CawPlus
                 ToolStripButton gen = new ToolStripButton("Generate Terrain");
                 gen.DisplayStyle = ToolStripItemDisplayStyle.Text;
                 gen.Font = new Font(bar.Font, FontStyle.Bold);
-                gen.ToolTipText = "CAW Plus: random terrain and road layout from a seed";
+                gen.ToolTipText = "CAW Plus: random terrain (hills, rivers, coasts, lakes) from a seed";
                 gen.Click += delegate { ShowTerrainGen(form); };
                 bar.Items.Add(gen);
                 ToolStripButton dt = new ToolStripButton("Distant Terrain");
@@ -458,5 +515,12 @@ namespace CawPlus
                 MessageBox.Show(owner, "Auto-Paint failed to open:\n" + ex.Message, "Auto-Paint", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
+    }
+
+    /// <summary>Another world was opened in CAW while a CAW Plus action was running; the action stopped.</summary>
+    internal sealed class WorldChangedException : Exception
+    {
+        public WorldChangedException()
+            : base("Another world was opened while this was running, so CAW Plus stopped; nothing more was written to either world.") { }
     }
 }

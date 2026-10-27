@@ -13,7 +13,6 @@ namespace CawPlus
         public PlaceKind Kind;
         public int Count;
         public string Instance = ""; // catalog key instance (hex), when known
-        public string Layer = "";    // the World Layer the reference world keeps it in
         // share of this object's instances per terrain band (sums to 1 per array)
         public float[] Slope = new float[PlacementEngine.SlopeBands.Length + 1];
         public float[] Rel = new float[PlacementEngine.RelBands.Length + 1];
@@ -25,7 +24,7 @@ namespace CawPlus
     internal sealed class KindShape
     {
         public float PerHa = float.NaN, NnMedian = float.NaN, Within15 = float.NaN, GroupMean = float.NaN, GroupP90 = float.NaN;
-        public float RoadP10 = float.NaN, RoadP50 = float.NaN, RoadShare15 = float.NaN;
+        public float RoadP10 = float.NaN, RoadP50 = float.NaN;
         public float[] Road;     // share of this kind per PlacementEngine.RoadBands band (null = not measured)
     }
 
@@ -46,7 +45,7 @@ namespace CawPlus
         public float[] LandSlope, LandRel, LandWater, LandRoad;
         // how each kind is arranged, and where the streetlights are (built-in worlds: tools/placement.py)
         public readonly Dictionary<PlaceKind, KindShape> Shape = new Dictionary<PlaceKind, KindShape>();
-        public float LightSpacing = float.NaN, LightOffset = float.NaN, LitShare = float.NaN, LightEveryM = float.NaN;
+        public float LightOffset = float.NaN, LitShare = float.NaN, LightEveryM = float.NaN;
         // a library made before forests were decoded (no "cluster tree" item: EA's forests are stored as cluster
         // transforms in the layer files, #66): its tree count is far too low to aim for, so the Trees sliders decide
         public bool TreeCountIncomplete;
@@ -251,7 +250,7 @@ namespace CawPlus
                         string[] p = v.Split(new[] { '|' }, 6);
                         if (p.Length < 6) break;
                         RefObject r = new RefObject();
-                        r.Kind = (PlaceKind)Enum.Parse(typeof(PlaceKind), p[0]); r.Count = int.Parse(p[1], CultureInfo.InvariantCulture);
+                        r.Kind = LibraryText.EnumOf<PlaceKind>(p[0]); r.Count = int.Parse(p[1], CultureInfo.InvariantCulture);
                         r.Slope = Split(p[2]); r.Rel = Split(p[3]); r.Water = Split(p[4]); r.Name = p[5]; r.HasBands = true;
                         lib.Items.Add(r);
                         break;
@@ -260,17 +259,6 @@ namespace CawPlus
             return lib;
         }
 
-        /// <summary>
-        /// Reads a bundled reference world (library/*.props, made by tools/worldstats.py from a world's layer files):
-        /// name=, area_ha=, layer=Kind|Layer|count|median spacing, item=Kind|Layer|count|instance hex|name; and, from
-        /// tools/placement.py (the world's objects measured against its own heightmap and roads):
-        /// land=slope|rel|water|road shares, bands=instance|slope|rel|water shares (per item),
-        /// kind=Kind|per_ha|nn_median|share_within_15m|group_mean|group_p90|road_p10|road_p50|road_share_15m|road shares,
-        /// lights=spacing|offset|lit_share|lit_junction_m|unlit_junction_m|metres of lit road per light. land= and kind= end with road-distance
-        /// shares (PlacementEngine.RoadBands).
-        /// Counts give the allow-list, weights and densities; bands give each item's habitat; kind and lights lines
-        /// give the arrangement (road setback, groups, which roads are lit).
-        /// </summary>
         /// <summary>Learned placement scores (#96): per kind ("Tree", "Bush", "Rock", "Rock0".."Rock3") and feature (slope,
         /// hollow, above_sea, water, road, path, lot, trees15) the band edges and the likelihood ratio per band.</summary>
         public Dictionary<string, Dictionary<string, float[][]>> Scores = new Dictionary<string, Dictionary<string, float[][]>>();
@@ -284,6 +272,17 @@ namespace CawPlus
             return b < t[1].Length ? t[1][b] : 1;
         }
 
+        /// <summary>
+        /// Reads a bundled reference world (library/*.props, made by tools/worldstats.py from a world's layer files):
+        /// name=, area_ha=, layer=Kind|Layer|count|median spacing, item=Kind|Layer|count|instance hex|name; and, from
+        /// tools/placement.py (the world's objects measured against its own heightmap and roads):
+        /// land=slope|rel|water|road shares, bands=instance|slope|rel|water shares (per item),
+        /// kind=Kind|per_ha|nn_median|share_within_15m|group_mean|group_p90|road_p10|road_p50|road_share_15m|road shares,
+        /// lights=spacing|offset|lit_share|lit_junction_m|unlit_junction_m|metres of lit road per light. land= and kind= end with road-distance
+        /// shares (PlacementEngine.RoadBands).
+        /// Counts give the allow-list, weights and densities; bands give each item's habitat; kind and lights lines
+        /// give the arrangement (road setback, groups, which roads are lit).
+        /// </summary>
         public static ObjectLibrary LoadProps(string path) { return LoadProps(Path.GetFileNameWithoutExtension(path), File.ReadAllLines(path)); }
 
         public static ObjectLibrary LoadProps(string name, string[] lines)
@@ -318,9 +317,9 @@ namespace CawPlus
                     if (p.Length < 9) continue;
                     KindShape sh = new KindShape();
                     sh.PerHa = Pn(p[1]); sh.NnMedian = Pn(p[2]); sh.Within15 = Pn(p[3]); sh.GroupMean = Pn(p[4]); sh.GroupP90 = Pn(p[5]);
-                    sh.RoadP10 = Pn(p[6]); sh.RoadP50 = Pn(p[7]); sh.RoadShare15 = Pn(p[8]);
+                    sh.RoadP10 = Pn(p[6]); sh.RoadP50 = Pn(p[7]);
                     if (p.Length >= 10 && p[9].Length > 0) sh.Road = Split(p[9]);
-                    lib.Shape[(PlaceKind)Enum.Parse(typeof(PlaceKind), p[0])] = sh;
+                    lib.Shape[LibraryText.EnumOf<PlaceKind>(p[0])] = sh;
                     continue;
                 }
                 if (k == "roadkm") { lib.RoadKm = Pn(v); continue; }
@@ -356,7 +355,7 @@ namespace CawPlus
                 if (k == "lights")
                 {
                     string[] p = v.Split('|');
-                    if (p.Length >= 3) { lib.LightSpacing = Pn(p[0]); lib.LightOffset = Pn(p[1]); lib.LitShare = Pn(p[2]); }
+                    if (p.Length >= 3) { lib.LightOffset = Pn(p[1]); lib.LitShare = Pn(p[2]); }
                     if (p.Length >= 6) lib.LightEveryM = Pn(p[5]);
                     continue;
                 }
@@ -365,13 +364,13 @@ namespace CawPlus
                 else if (k == "layer")
                 {
                     string[] p = v.Split('|');
-                    if (p.Length >= 4 && p[3].Length > 0) lib.Spacing[(PlaceKind)Enum.Parse(typeof(PlaceKind), p[0])] = P(p[3]);
+                    if (p.Length >= 4 && p[3].Length > 0) lib.Spacing[LibraryText.EnumOf<PlaceKind>(p[0])] = P(p[3]);
                 }
                 else if (k == "item")
                 {
                     string[] p = v.Split(new[] { '|' }, 5);
                     if (p.Length < 5) continue;
-                    PlaceKind kind = (PlaceKind)Enum.Parse(typeof(PlaceKind), p[0]);
+                    PlaceKind kind = LibraryText.EnumOf<PlaceKind>(p[0]);
                     int count = int.Parse(p[2], CultureInfo.InvariantCulture);
                     counts[(int)kind] += count;
                     // the same object in several of the world's layers: one entry with the total count
@@ -379,7 +378,7 @@ namespace CawPlus
                     foreach (RefObject q in lib.Items) if (q.Kind == kind && q.Instance == p[3]) { r = q; break; }
                     if (r != null) { r.Count += count; continue; }
                     r = new RefObject();
-                    r.Kind = kind; r.Layer = p[1];
+                    r.Kind = kind;
                     r.Count = count; r.Instance = p[3]; r.Name = p[4].Length > 0 ? p[4] : p[3];
                     lib.Items.Add(r);
                 }
@@ -398,7 +397,7 @@ namespace CawPlus
                 foreach (RefObject r in lib.Items) if (r.Kind == kv.Key) n += r.Count;
                 if (n >= 10) continue;
                 KindShape sh = kv.Value;
-                sh.NnMedian = sh.Within15 = sh.GroupMean = sh.GroupP90 = sh.RoadP10 = sh.RoadP50 = sh.RoadShare15 = float.NaN;
+                sh.NnMedian = sh.Within15 = sh.GroupMean = sh.GroupP90 = sh.RoadP10 = sh.RoadP50 = float.NaN;
                 sh.Road = null;
             }
             if (lib.LandSlope != null)
@@ -411,9 +410,9 @@ namespace CawPlus
             return lib;
         }
 
-        /// <summary>Bundled reference worlds (Library folder next to CAWPlus.exe) and ones learned in CAW (Documents\CAWPlus\Library).</summary>
         private static bool loggedOnce;
 
+        /// <summary>Bundled reference worlds (Library folder next to CAWPlus.exe) and ones learned in CAW (Documents\CAWPlus\Library).</summary>
         public static List<ObjectLibrary> LoadAll()
         {
             List<ObjectLibrary> list = new List<ObjectLibrary>();

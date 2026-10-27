@@ -5,8 +5,12 @@ namespace CawPlus
 {
     public enum RoadKind { Main = 0, Street = 1, Lane = 2 }
 
-    /// <summary>Neighbourhood road patterns, after EA worlds: Riverview's loops, small suburban grids, cul-de-sacs, farm lanes.</summary>
-    public enum HoodStyle { Loop, Grid, CulDeSac, Rural, Linear }
+    /// <summary>What a painted part of the plan is for (#171, PlanMap). The planner and Auto-Place build to it.</summary>
+    public enum PlanArea : byte { None = 0, Centre = 1, Houses = 2, Countryside = 3, Forest = 4, Park = 5, KeepClear = 6, MainRoad = 7 }
+
+    /// <summary>Neighbourhood road patterns, after EA worlds: Riverview's loops, small suburban grids, cul-de-sacs, farm lanes;
+    /// Template = one of EA's own districts, fitted to the land (RoadTemplates, #137).</summary>
+    public enum HoodStyle { Loop, Grid, CulDeSac, Rural, Linear, Template }
 
     internal sealed class RoadSettings
     {
@@ -37,8 +41,6 @@ namespace CawPlus
         public float Variety = 60;        // 0 = all neighbourhoods alike, 100 = every style mixed
         public float MaxGrade = 8;        // percent; EA worlds measured (tools/roadgrade.py): ~20 % of road length is steeper than 10 %
         public float SeaLevel = 10;
-        public bool CentralTown = true;   // town centre in the middle of the map, like EA's worlds
-        public bool Bridges = true;       // roads may cross water up to MaxBridgeWater wide on a bridge
         public bool Footpaths = true;     // promenades, neighbourhood trails and a park loop (PathPlanner)
         public bool TownLoops = true;     // loop roads round the downtown core (Bridgewood, EA towns)
         public float FootpathKm;          // with a Like world: add trails up to its footpath length (0 = only the above)
@@ -47,6 +49,7 @@ namespace CawPlus
         public float TargetKm;            // with a Like world: side streets are added until the town has about this much road (0 = off)
         public float DeadEndShare = 0.4f; // share of those side streets left as dead ends (EA: capped dead ends / junctions)
         public float BuildSlope = 10;     // percent: steepest land counted as buildable (EA: 3-33 %, tools/roadgrade.py land_slope_at_roads p75)
+        public float RoadTop = 1;         // roads and lots keep to the land below this share of it by height (EA's roads p98: Aurora Skies 0.35, Midnight Hollow 0.18, Monte Vista 0.99); 1 = anywhere
         public float SideCost = 1f;       // how strongly routes avoid running across steep hillsides (was 2.5; 1 matches EA best: roads 71.9 -> 72.8%, seeds 4-6)
         public float ClimbCost = 12;      // how strongly routes avoid climbing (cost x (1 + ClimbCost (grade/max)^2)); EA's roads climb more on hilly worlds
         public RoadTargets Targets;       // the Like world's measured town (RoadChecks); null = no checks
@@ -56,11 +59,25 @@ namespace CawPlus
         public LotTargets Lots;           // the Like world's lots (LotPlanner); null = no lots planned
         public TerrainProfile LotsLand;   // the Like world's terrain, to scale its lot count to this map's land
         public float LotsWorldM;          // the Like world's size in metres
-        public float LotsAmount = 1;      // x the scaled count
         public RoadCharacter Character;   // the world type's region: geography checks and hints (src/RoadCharacter.cs); null = none
         public string WorldType = "";     // the preset Targets/Lots/LotsLand/Character came from (CAWPlusHelper looks them up by it)
         public float[] CentreHint;        // x, z metres: the town centre belongs near here (a river fork's point, #139); null = none
+        // World Builder (#173, the tester: "it shouldn't build anything the user doesn't put down"): the roads exactly as drawn,
+        // as polylines in metres packed n, x0, y0, x1, y1 ... per line; with them nothing else is planned (no side streets,
+        // neighbourhoods or edge roads) and lots go only along roads in the painted town centre and houses
+        public float[] DrawnRoads;
         public float[] Ring;              // x, z, radius as shares of the map size: a road all the way round this circle (an atoll's islands, Sunlit Tides); null = none
+        public float Templates;           // share of neighbourhoods laid from EA district templates (#137): 0 = none, 1 = all that fit
+        public bool TemplateCentre;       // the town centre laid from an EA town-centre district where one fits (#137)
+        public string TemplateWorlds = ""; // comma list of world keys: only their EA districts/pieces are used (mixing chosen worlds); "" = all
+        public bool IslandTowns;          // islands no bridge reaches get streets of their own (archipelagos: Isla Paradiso, #166)
+        public bool Puzzle;               // the town put together only from EA road pieces (RoadPuzzle.cs, #137); else planned
+        public int[] Plan;                // the painted plan (PlanArea per planning cell, N x N, #171); null = none
+        public float[] BridgeSpans;       // the world type's road bridges, metres port to port (Bridges.ForWorld); null = EA's 72 m EP7 bridges
+        public float LearnedCost = 0;     // routes follow where EA's roads go on the land (RoadCost.cs, library/road_cost.txt): strength, 0 = off
+        public float[] TownDesign;        // the World type's town measured for the designer: run m, dead-end m, crossroads share, ring radius m; null = built-in
+        public bool Design = false;       // the town designer (src/TownDesigner.cs): features, sites and roads by purpose, aligned blocks
+        public RoadHabits Habits = null;  // learned growth habits (src/RoadHabits.cs): side streets grown by them instead of neighbourhood patterns; null = off
 
         public RoadSettings Clone() { return (RoadSettings)MemberwiseClone(); }
     }
@@ -73,6 +90,10 @@ namespace CawPlus
         internal List<int> Cells = new List<int>();         // planning-grid cells it runs over
         internal List<float[]> Spans = new List<float[]>();  // bridges on this road (x1, y1, x2, y2)
         public bool Straight;                               // a downtown grid street or a straight side street: kept straight
+        public bool Designed;                               // laid by the town designer to a set shape (promenade): kept, only simplified
+        public bool Grown;                                  // grown by the learned habits (RoadHabits): kept as grown, only simplified
+        public bool OwnIsland;                              // on an island no bridge reaches: its own small network, not joined to the town (#166)
+        public string Template;                             // the EA district template it was laid from (RoadTemplate.Name), else null
     }
 
     internal sealed class LotSite
@@ -89,7 +110,7 @@ namespace CawPlus
         public List<HoodStyle> Hoods = new List<HoodStyle>();
         public float MotorwayKm;                              // the through road's length (desert towns), 0 = none
         public List<float[]> HoodCentres = new List<float[]>(); // metres, one per entry in Hoods
-        public int LoopArcs, LoopVerts; // TownLoops: arcs built, ring points found
+        public int LoopArcs;            // TownLoops: arcs built
         public int RingArcs;            // RingRoad: arcs built of 24
         public int ShoreArcs;           // ShoreRoad: arcs built
         public float TownRadius;                               // downtown radius, metres
@@ -106,6 +127,21 @@ namespace CawPlus
         public int HoodsAsked;                                 // neighbourhoods asked for (Hoods holds those that fit the land)
         public float[] Centre;
         public float TotalKm;
+        public List<string> TemplatesUsed = new List<string>(); // EA district templates laid (RoadTemplate.Name)
+        public int IslandStreets;                              // islands given streets of their own (IslandTowns)
+        public List<string> Design = new List<string>();       // the town designer's decisions, in words
+        public float[] Park;                                   // the town designer's central park: centre x, z, axis ux, uz, size along, across (m)
+        public int PuzzlePieces, PuzzleTees, PuzzleLoops, PuzzleBridges; // puzzle mode: EA pieces laid, connectors ending on a road, ports joined, bridges
+
+        /// <summary>What the clean-up passes did, for the log.</summary>
+        public string CleanupSummary()
+        {
+            return string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                "neighbourhoods {11} of {12} fit the land; dead ends near other roads: {0} joined, {1} cut back, {2} dropped; cut-off groups: {3} joined, {4} dropped ({5:F1} km), {6} still apart; islands with streets of their own {13}; short links straightened {7}; town loop arcs {8}, ring road arcs {9}, shore road arcs {10}{14}",
+                DeadEndsJoined, DeadEndsTrimmed, DeadEndsDropped, IslandsJoined, IslandsDropped, IslandsDroppedKm, IslandsLeft,
+                LinksStraightened, LoopArcs, RingArcs, ShoreArcs, Hoods.Count, HoodsAsked, IslandStreets,
+                PuzzlePieces > 0 ? string.Format("; puzzle: {0} EA pieces, {1} ending on a road, {2} loops closed, {3} bridges", PuzzlePieces, PuzzleTees, PuzzleLoops, PuzzleBridges) : "");
+        }
     }
 
     /// <summary>
@@ -115,18 +151,18 @@ namespace CawPlus
     /// limits, water is impassable. Roads end on other roads (T-junctions) or at grid crossings, never cross mid-way.
     /// Reference: Riverview's road graph (decoded from its .world): small central grid, 400-700 m curving loops.
     /// </summary>
-    internal static class RoadPlanner
+    internal static partial class RoadPlanner
     {
         private const float Cell = TerrainGen.CoarseCell;
-        public const float MaxBridgeWater = 56f;  // metres of water a bridge may cross (EA bridge pieces span 65-72 m)
+        public const float DefaultBridgeSpan = 72f; // EA's EP7 bridges (flat, wooden), port to port
         private const float BridgePenalty = 260f; // metres of extra route a bridge is worth, so it's used only to save a detour
         private const int Town = 0;          // owner id of downtown and edge roads; neighbourhood i = i + 1; sites = 100 + i
         private const int NoOwner = -99;
         private const int Ring = 400;        // owner id of the loop roads round the core
         private const int RingOwn = 450;     // owner id of an atoll's ring road
         private const int ArteryOwn = 460;   // owner ids of the town's main roads out (460 + k)
-        private const int ShoreOwn = 470;
-        private const int MotorOwn = 490;    // owner id of a desert town's through road    // owner id of a coastal town's shore road
+        private const int ShoreOwn = 470;    // owner id of a coastal town's shore road
+        private const int MotorOwn = 490;    // owner id of a desert town's through road
 
         private sealed class Ctx
         {
@@ -137,21 +173,33 @@ namespace CawPlus
             public int Centre;
             public TownShape Shape;  // the Like world's town shape scaled to this town's lots (null = none)
             public float[] Slope;      // ground slope (rise/run), lightly blurred
-            public float[] Build;      // share of buildable ground (land, slope < 10%) within ~40 m
+            public float[] Build;      // share of buildable ground (land, slope < max(BuildSlope, MaxGrade)) within ~40 m
+            public bool[] High;        // land above the World type's road height (RoadTop): no town there, routes only cross it
             public float[] BuildWide;  // the same within about a neighbourhood's radius
             public float[] BuildTown;  // the same within ~120 m (downtown)
             public float[] Ridge;      // metres above the 150 m-blurred terrain: > 0 on hills and ridges
             public float[] Low;        // 0 at sea level .. 1 at the top: roads prefer low ground
             public float[] Shore;      // metres to the nearest water
+            public float[] Learned;    // RoadCost multiplier per cell (null = off)
             // A* buffers (direction-aware states), reused between calls
             public float[] G; public int[] From; public int[] Stamp; public int CurStamp;
             public List<float[]> BridgeMids = new List<float[]>(); // metres, bridges planned so far
             public float[] Crowd; public int[] CrowdOwner;            // nearness to existing roads (0..1) and whose
+            public int[] Plan; public bool PlanCentre, PlanHouses;     // the painted plan (#171): has a town centre, has houses or countryside
+            public float BridgeSpan = DefaultBridgeSpan;              // the longest bridge the world type has
+            public float MaxWater { get { return BridgeSpan - 16; } } // water one bridge crosses: it reaches 8 m onto land at both ends
         }
 
+        /// <summary>Offline tools: called with every layout PlanChecked weighed (nets, their check results, how many musts
+        /// each passed, and the one kept), so they can be scored or saved. Not used by the plugin.</summary>
+        public delegate void CandidatesFn(Grid h, RoadSettings s, RoadNet[] nets, RoadChecks.Result[] found, int[] musts, int kept);
+        public static CandidatesFn Candidates = null;
+
         /// <summary>
-        /// Plans up to 'tries' layouts (the road seed, then variations of it) and keeps the first that passes every road
-        /// check against the Like world's town (RoadChecks), else the one that passes most. Without targets, one plan.
+        /// Plans up to 'tries' layouts (the road seed, then variations of it). Only layouts passing the three musts (roads
+        /// connected, >= 90% of the lots, no road beside another) are compared: the most road checks passed (RoadChecks and
+        /// the world type's town, grid, profile and region checks), then the closest score. If none passes them all, the
+        /// one passing most musts is kept and result.Fallback says so. Without targets, or with tries <= 1, one plan.
         /// </summary>
         public static RoadNet PlanChecked(Grid h, RoadSettings s, int tries, out RoadChecks.Result result)
         {
@@ -227,6 +275,7 @@ namespace CawPlus
                 if (!clean[bestT]) miss.Add("no road beside another");
                 result.Fallback = string.Format("no layout of {0} passed every must; kept the best, missing: {1}", tries, string.Join(", ", miss.ToArray()));
             }
+            if (Candidates != null) Candidates(h, s, nets, found, musts, bestT);
             return best;
         }
 
@@ -243,17 +292,32 @@ namespace CawPlus
             c.OnRoad = new int[n * n];
             c.Owner = new int[n * n];
             c.Crowd = new float[n * n]; c.CrowdOwner = new int[n * n];
+            if (s.BridgeSpans != null && s.BridgeSpans.Length > 0)
+            {
+                float longest = 0;
+                foreach (float b in s.BridgeSpans) longest = Math.Max(longest, b);
+                if (longest >= 40) c.BridgeSpan = longest;
+            }
+            if (s.Plan != null && s.Plan.Length == n * n)
+            {
+                c.Plan = s.Plan;
+                foreach (int v in s.Plan)
+                {
+                    if (v == (int)PlanArea.Centre) c.PlanCentre = true;
+                    if (v == (int)PlanArea.Houses || v == (int)PlanArea.Countryside) c.PlanHouses = true;
+                }
+            }
             float worldSize = (n - 1) * Cell;
             float R = Clamp(worldSize * 0.11f, 90, 230); // neighbourhood radius, metres
             Measure(c, R);
-            int lotsWanted = s.Lots != null ? (int)Math.Round(LotPlanner.Wanted(s.Lots, s.LotsLand, s.LotsWorldM, h, Cell, s.SeaLevel) * s.LotsAmount) : 0;
+            int lotsWanted = s.Lots != null ? LotPlanner.Wanted(s.Lots, s.LotsLand, s.LotsWorldM, h, Cell, s.SeaLevel) : 0;
             if (s.Town != null) c.Shape = s.Town.Scaled(TownShape.ScaleFor(lotsWanted, s.Lots != null ? s.Lots.Count : 0));
+            if (s.DrawnRoads != null && s.DrawnRoads.Length > 0) return DrawnTown(c);
 
-            // 1. Town centre: the biggest flat area, low, not on a hill; with CentralTown, in the middle of the map
-            //    (EA's worlds have the main town central, roads spreading out to the edges); else anywhere inland.
+            // 1. Town centre: the biggest flat area, low, not on a hill, slightly favouring the middle of the map.
             float lo, hi; h.MinMax(out lo, out hi);
             int centre = -1; float best = float.MinValue;
-            int[] lims = s.CentreHint != null ? new[] { n / 10 } : s.CentralTown ? new[] { n * 3 / 10, n / 6 } : new[] { n / 6 };
+            int[] lims = s.CentreHint != null ? new[] { n / 10 } : new[] { n / 6 };
             foreach (int lim in lims)
             {
                 for (int y = lim; y < n - lim; y++)
@@ -261,9 +325,10 @@ namespace CawPlus
                     {
                         int i = y * n + x;
                         if (!c.Land[i]) continue;
+                        if (c.PlanCentre && P(c, i) != PlanArea.Centre) continue; // where it was painted
                         float mid = 1 - (float)Math.Sqrt(Sq(x - n / 2f) + Sq(y - n / 2f)) / (n * 0.5f);
                         float rel = (h.D[i] - lo) / Math.Max(1, hi - lo);
-                        float v = c.BuildTown[i] * 2.2f + c.Flat[i] * 0.6f + mid * (s.CentralTown ? 2.5f : 0.8f) - rel * 0.8f
+                        float v = c.BuildTown[i] * 2.2f + c.Flat[i] * 0.6f + mid * 0.8f - rel * 0.8f
                                   - Math.Max(0, c.Ridge[i]) / 15f + (float)c.Rng.NextDouble() * 0.2f;
                         if (c.BuildTown[i] < 0.35f) v -= 2; // not enough room for a town here
                         // coastal towns (Icelandic fjord towns, harbours, island and waterfront cities) sit by the water
@@ -281,10 +346,161 @@ namespace CawPlus
             // 1b. A through road across the map beside the town (the tester, #91: as Lucky Palms has), laid first so the town's
             // roads are built against it and join it (a later route can't cross the town's roads)
             if (s.Character != null && s.Character.Motorway) Motorway(c, worldSize);
+            // 1c. Main roads drawn on the plan (#171)
+            if (c.Plan != null) PaintedRoads(c);
 
+            // 2-6. The town: put together from EA's road pieces (puzzle mode), else planned
+            // the town designer for mainland towns; archipelagos and atolls keep the planner (bridged islands, the ring road)
+            if (s.Design && !s.IslandTowns && s.Ring == null) DesignTown(c, worldSize, lotsWanted);
+            else if (!s.Puzzle || !PuzzleTown(c, worldSize, lotsWanted, HoodCount(s, lotsWanted, worldSize)))
+                PlanTown(c, worldSize, R, lotsWanted);
+
+            // 7. Smooth, find junctions, measure.
+            // which road ends meet another road (a T or a crossing node), before smoothing moves things
+            List<bool[]> meets = EndsMeeting(c);
+            // grid staircases and small switchbacks out first (9 m), then round the corners
+            foreach (Road r in c.Net.Roads)
+            {
+                if (r.Straight) { r.Points = Simplify(r.Points, 0.5f, 40f); continue; } // grid and straight streets as laid
+                if (r.Grown || r.Designed) { r.Points = Simplify(r.Points, 0.5f, 24f); continue; }   // grown streets keep their learned bends
+                if (r.Spans.Count == 0) // roads with bridges keep the relaxed smoothing below
+                {
+                    // straight runs where the land allows, joined by round bends (#162, the tester: roads wobbly, hooks at bends)
+                    r.Points = Simplify(Fillet(Taut(c, r, Resample(r.Points, Cell)), BendRadius(r.Kind)), 0.5f, 30f);
+                    continue;
+                }
+                List<float[]> p = Simplify(r.Points, 9f, 64f);
+                p = Relax(c, Resample(p, Cell), 14, 7f); // bends eased into curves (straight grid streets stay straight)
+                p = TerrainGen.Chaikin(TerrainGen.Chaikin(p));
+                // no bends tighter than ~30 m radius (EA's Riverview: 0.3% of its road under 20 m; CAW draws tight
+                // bends badly and refuses some)
+                p = Ease(c, Resample(p, 6f), 32f, 80, 20f);
+                // fair the line: small S-wiggles out (the tester: roads looked hand-drawn; ours had 3-7 wiggles per km at
+                // 10 m steps, EA's 0.3-2.5), keeping the bends that follow the land
+                p = Relax(c, Resample(p, 10f), 30, 4f);
+                r.Points = Simplify(p, 1f, 30f);
+            }
+            SnapEnds(c.Net, meets);
+            c.Net.Roads.RemoveAll(delegate (Road r) { return r.Points.Count < 2; });
+            MergeEnds(c.Net);
+            StraightEnds(c);
+            StraightLinks(c);
+            DeadEndClearance(c);
+            ReconnectIslands(c);
+            // the bend where a straightened end rejoins its road eased again (ends and straight runs stay)
+            foreach (Road r in c.Net.Roads) if (r.Spans.Count == 0 && !r.Straight && !r.Grown && !r.Designed) r.Points = Simplify(Ease(c, Resample(r.Points, 6f), 32f, 40, 8f), 1f, 30f);
+            foreach (Road r in c.Net.Roads) c.Net.Bridges.AddRange(r.Spans);
+            c.Net.Junctions = FindJunctions(c.Net);
+            foreach (Road r in c.Net.Roads)
+                for (int i = 1; i < r.Points.Count; i++) c.Net.TotalKm += (float)Math.Sqrt(Sq(r.Points[i][0] - r.Points[i - 1][0]) + Sq(r.Points[i][1] - r.Points[i - 1][1])) / 1000f;
+
+            // 7b. Lots along the finished roads.
+            if (lotsWanted > 0) c.Net.Lots = PlanLots(c, LotPlanner.Place(h, Cell, c.Net, s.SeaLevel, s.Lots, lotsWanted, s.Seed, false, c.Shape,
+                s.TownDesign != null && s.TownDesign.Length > 5 ? s.TownDesign[5] : 0));
+            if (c.Net.Park != null) AddPark(c);
+
+            // 8. Footpaths: a network of their own between and beside the roads.
+            if (s.Footpaths) PathPlanner.Plan(h, c.Net, s);
+            return c.Net;
+        }
+
+        /// <summary>
+        /// The World Builder's roads (#173): each drawn line becomes a main road as it is (its ends where the lines meet
+        /// are shared, so they become junctions); where a line crosses water no wider than a bridge, a bridge. Lots go
+        /// along them only inside the painted town centre and houses. Nothing else is added.
+        /// </summary>
+        private static RoadNet DrawnTown(Ctx c)
+        {
+            RoadSettings s = c.S;
+            float[] d = s.DrawnRoads;
+            for (int k = 0; k < d.Length;)
+            {
+                int m = (int)d[k++];
+                Road r = new Road { Kind = RoadKind.Main, Area = -1 };
+                for (int j = 0; j < m && k + 1 < d.Length; j++, k += 2) r.Points.Add(new[] { d[k], d[k + 1] });
+                if (r.Points.Count < 2) continue;
+                r.Points = Resample(r.Points, 6f);
+                // water crossed: a bridge from bank to bank where it's short enough, else that stretch is left out
+                List<float[]> keep = new List<float[]>();
+                int i = 0;
+                while (i < r.Points.Count)
+                {
+                    if (Wet(c, r.Points[i])) { i++; continue; }
+                    int j = i;
+                    while (j + 1 < r.Points.Count && !Wet(c, r.Points[j + 1])) j++;
+                    keep.Add(new[] { (float)i, (float)j });
+                    i = j + 1;
+                }
+                List<List<float[]>> pieces = new List<List<float[]>>();
+                List<float[]> cur = null;
+                for (int q = 0; q < keep.Count; q++)
+                {
+                    int a = (int)keep[q][0], b = (int)keep[q][1];
+                    if (cur != null && q > 0)
+                    {
+                        float[] bank1 = r.Points[(int)keep[q - 1][1]], bank2 = r.Points[a];
+                        float gap = (float)Math.Sqrt(Sq(bank2[0] - bank1[0]) + Sq(bank2[1] - bank1[1]));
+                        if (gap <= c.MaxWater + 12) r.Spans.Add(new[] { bank1[0], bank1[1], bank2[0], bank2[1] });
+                        else { pieces.Add(cur); cur = null; }
+                    }
+                    if (cur == null) cur = new List<float[]>();
+                    for (int t = a; t <= b; t++) cur.Add(r.Points[t]);
+                }
+                if (cur != null) pieces.Add(cur);
+                for (int q = 0; q < pieces.Count; q++)
+                {
+                    if (pieces[q].Count < 2) continue;
+                    Road part = q == 0 ? r : new Road { Kind = RoadKind.Main, Area = -1 };
+                    part.Points = Simplify(pieces[q], 0.5f, 24f);
+                    if (q > 0) part.Spans.Clear();
+                    c.Net.Roads.Add(part);
+                }
+            }
+            foreach (Road r in c.Net.Roads) c.Net.Bridges.AddRange(r.Spans);
+            c.Net.Junctions = FindJunctions(c.Net);
+            foreach (Road r in c.Net.Roads)
+                for (int i = 1; i < r.Points.Count; i++) c.Net.TotalKm += (float)Math.Sqrt(Sq(r.Points[i][0] - r.Points[i - 1][0]) + Sq(r.Points[i][1] - r.Points[i - 1][1])) / 1000f;
+            if (s.CentreHint != null) c.Net.Centre = s.CentreHint;
+            // lots: as many as fit along the roads, kept only in the town centre and houses squares
+            if (s.Lots != null && c.Plan != null)
+            {
+                List<PlannedLot> lots = LotPlanner.Place(c.H, Cell, c.Net, s.SeaLevel, s.Lots, 2000, s.Seed, true, null);
+                lots.RemoveAll(delegate (PlannedLot l)
+                {
+                    float[] m = l.Centre;
+                    if (!Inside(c, m[0], m[1])) return true;
+                    PlanArea a = P(c, Idx(c, m[0], m[1]));
+                    return a != PlanArea.Centre && a != PlanArea.Houses;
+                });
+                c.Net.Lots = lots;
+            }
+            return c.Net;
+        }
+
+        /// <summary>Under water (the sea level; the planner's own land test keeps half a metre clear of it).</summary>
+        private static bool Wet(Ctx c, float[] p)
+        {
+            return Inside(c, p[0], p[1]) && TerrainGen.Sample(c.H, p[0] / Cell, p[1] / Cell) < c.S.SeaLevel;
+        }
+
+        /// <summary>The number of neighbourhoods: the preset's, or with the world type's grid EA's many small ones.</summary>
+        private static int HoodCount(RoadSettings s, int lotsWanted, float worldSize)
+        {
+            if (s.Grid == null) return s.Neighbourhoods;
+            return Math.Max(3, Math.Min(10, (int)Math.Round((s.Lots != null ? lotsWanted : 80) * 0.55f / 7f)));
+        }
+
+        /// <summary>Steps 2-6 of Plan: downtown, main roads, loops, edge roads, neighbourhoods, sites, joins, side streets.</summary>
+        private static void PlanTown(Ctx c, float worldSize, float R, int lotsWanted)
+        {
+            RoadSettings s = c.S;
+            Grid h = c.H;
+            int n = c.N, centre = c.Centre;
             // 2. Downtown: main street with a few blocks either side.
             float townRadius = 60;
-            if (s.Downtown || s.Grid != null) townRadius = Downtown(c);
+            float fromTemplate = s.TemplateCentre ? TemplateCentre(c) : 0; // an EA town centre, where one fits (#137)
+            if (fromTemplate > 0) townRadius = fromTemplate;
+            else if (s.Downtown || s.Grid != null) townRadius = Downtown(c);
             c.Net.TownRadius = townRadius;
             // 2a. With the Like world's grid: main roads straight out of the town in its number of directions (the tester's
             // mark-up: 67-79% of EA's main road runs out from the centre, not round it), instead of the loops below
@@ -314,14 +530,8 @@ namespace CawPlus
             // candidate spots, best first; a neighbourhood that doesn't fit the land is skipped for the next spot
             // with the Like world's grid: EA's neighbourhoods are small (1-6 ha, 150-350 m across) and many (6-10), 100-500 m
             // from the centre, mostly one street lined with houses or a short cul-de-sac (the tester's mark-up)
-            int hoods = s.Neighbourhoods;
-            float hoodR = R;
-            if (s.Grid != null)
-            {
-                int wantLots = s.Lots != null ? (int)Math.Round(LotPlanner.Wanted(s.Lots, s.LotsLand, s.LotsWorldM, h, Cell, s.SeaLevel) * s.LotsAmount) : 80;
-                hoods = Math.Max(3, Math.Min(10, (int)Math.Round(wantLots * 0.55f / 7f)));
-                hoodR = Clamp(worldSize * 0.06f, 70, 130);
-            }
+            int hoods = s.Habits != null ? 0 : HoodCount(s, lotsWanted, worldSize); // with learned habits the side streets grow instead
+            float hoodR = s.Grid != null ? Clamp(worldSize * 0.06f, 70, 130) : R;
             c.Net.HoodsAsked = hoods;
             List<int> hubs = s.Grid != null ? Hubs(c, hoods * 3, townRadius + 40, hoodR * 2.0f, hoodR)
                                             : Hubs(c, hoods * 3, townRadius + R * 1.1f, R * 2.1f, R);
@@ -337,7 +547,15 @@ namespace CawPlus
                 if (st == HoodStyle.Grid && open < 0.75f) st = HoodStyle.Loop;
                 if (st == HoodStyle.Loop && open < 0.6f) st = HoodStyle.CulDeSac;
                 if (FreeOfOthers(c, (hubs[k] % n) * Cell, (hubs[k] / n) * Cell, own) == false) continue;
-                bool ok;
+                bool countryside = P(c, hubs[k]) == PlanArea.Countryside; // painted countryside: a farm lane
+                if (countryside) st = HoodStyle.Rural;
+                bool ok = false;
+                // an EA district laid as it is, where one fits the land (#137); else the built-in pattern
+                if (!countryside && s.Templates > 0 && c.Rng.NextDouble() < s.Templates && TemplateHood(c, hubs[k], R, own))
+                {
+                    c.Net.Hoods.Add(HoodStyle.Template); c.Net.HoodCentres.Add(new[] { (hubs[k] % n) * Cell, (hubs[k] / n) * Cell }); made++;
+                    continue;
+                }
                 switch (st)
                 {
                     case HoodStyle.Loop: ok = LoopHood(c, hubs[k], R, own); break;
@@ -354,6 +572,8 @@ namespace CawPlus
 
             // 6. Every separate piece joined to the town, or dropped if it can't be.
             ConnectAll(c);
+            // 6a. Islands no bridge reaches: streets of their own (EA's Isla Paradiso has roads on several islands)
+            if (s.IslandTowns) IslandTowns(c);
 
             // 6b. Side streets: EA towns have many short streets off the main roads (T-junctions, dead ends). Add them into
             // buildable land no road serves yet until the Like world's road length is reached, and, with lots, until the
@@ -367,7 +587,7 @@ namespace CawPlus
             if (lotsWanted > 0)
             {
                 int onRoadWanted = (int)Math.Round(lotsWanted * Math.Max(0.1f, Math.Min(1f, s.Lots.OnRoad)));
-                int fit = LotPlanner.Place(h, Cell, c.Net, s.SeaLevel, s.Lots, lotsWanted, s.Seed, true, c.Shape).Count;
+                int fit = PlanLots(c, LotPlanner.Place(h, Cell, c.Net, s.SeaLevel, s.Lots, lotsWanted, s.Seed, true, c.Shape)).Count;
                 if (fit < onRoadWanted)
                 {
                     float km = 0;
@@ -378,52 +598,198 @@ namespace CawPlus
                     targetKm = Math.Max(targetKm, Math.Min(cap, km + more));
                 }
             }
-            if (targetKm > 0) Infill(c, targetKm);
-
-            // 7. Smooth, find junctions, measure.
-            // which road ends meet another road (a T or a crossing node), before smoothing moves things
-            List<bool[]> meets = EndsMeeting(c);
-            // grid staircases and small switchbacks out first (9 m), then round the corners
-            foreach (Road r in c.Net.Roads)
+            if (s.Habits != null)
             {
-                if (r.Straight) { r.Points = Simplify(r.Points, 0.5f, 40f); continue; } // grid and straight streets as laid
-                if (TautRoads && r.Spans.Count == 0)
-                {
-                    // straight runs where the land allows, joined by round bends (#162, the tester: roads wobbly, hooks at bends)
-                    r.Points = Simplify(Fillet(Taut(c, r, Resample(r.Points, Cell)), BendRadius(r.Kind)), 0.5f, 30f);
-                    continue;
-                }
-                List<float[]> p = Simplify(r.Points, 9f, 64f);
-                p = Relax(c, Resample(p, Cell), 14, 7f); // bends eased into curves (straight grid streets stay straight)
-                p = TerrainGen.Chaikin(TerrainGen.Chaikin(p));
-                // no bends tighter than ~30 m radius (EA's Riverview: 0.3% of its road under 20 m; CAW draws tight
-                // bends badly and refuses some)
-                p = Ease(c, Resample(p, 6f), 32f, 80, 20f);
-                // fair the line: small S-wiggles out (the tester: roads looked hand-drawn; ours had 3-7 wiggles per km at
-                // 10 m steps, EA's 0.3-2.5), keeping the bends that follow the land
-                p = Relax(c, Resample(p, 10f), 30, 4f);
-                r.Points = Simplify(p, 1f, 30f);
+                if (targetKm <= 0 && s.Targets != null && !float.IsNaN(s.Targets.Km))
+                    targetKm = s.Targets.Km * (s.Targets.WorldM > 0 ? worldSize * worldSize / (s.Targets.WorldM * s.Targets.WorldM) : 1);
+                Grow(c, targetKm > 0 ? targetKm : 6f);
             }
-            SnapEnds(c.Net, meets);
-            c.Net.Roads.RemoveAll(delegate (Road r) { return r.Points.Count < 2; });
-            MergeEnds(c.Net);
-            StraightEnds(c);
-            StraightLinks(c);
-            DeadEndClearance(c);
-            ReconnectIslands(c);
-            // the bend where a straightened end rejoins its road eased again (ends and straight runs stay)
-            foreach (Road r in c.Net.Roads) if (r.Spans.Count == 0 && !r.Straight) r.Points = Simplify(Ease(c, Resample(r.Points, 6f), 32f, 40, 8f), 1f, 30f);
-            foreach (Road r in c.Net.Roads) c.Net.Bridges.AddRange(r.Spans);
-            c.Net.Junctions = FindJunctions(c.Net);
-            foreach (Road r in c.Net.Roads)
-                for (int i = 1; i < r.Points.Count; i++) c.Net.TotalKm += (float)Math.Sqrt(Sq(r.Points[i][0] - r.Points[i - 1][0]) + Sq(r.Points[i][1] - r.Points[i - 1][1])) / 1000f;
+            else if (targetKm > 0) Infill(c, targetKm);
+        }
 
-            // 7b. Lots along the finished roads.
-            if (lotsWanted > 0) c.Net.Lots = LotPlanner.Place(h, Cell, c.Net, s.SeaLevel, s.Lots, lotsWanted, s.Seed, false, c.Shape);
+        // ---------- side streets grown by learned habits ----------
 
-            // 8. Footpaths: a network of their own between and beside the roads.
-            if (s.Footpaths) PathPlanner.Plan(h, c.Net, s);
-            return c.Net;
+        private static float Gauss(Random r)
+        {
+            double u1 = 1.0 - r.NextDouble(), u2 = r.NextDouble();
+            return (float)(Math.Sqrt(-2 * Math.Log(u1)) * Math.Cos(2 * Math.PI * u2));
+        }
+
+        /// <summary>
+        /// Side streets grown off the existing roads by the learned habits (RoadHabits, from EA's or real towns' road graphs):
+        /// branch points spaced as their roads' junction-to-junction runs, square branches at their share (else oblique),
+        /// crossroads at their share; each street grows in 8 m steps bending as their roads bend on land that steep, follows
+        /// the contour on slopes at their rate, keeps their spacing from other roads, and runs a learned length: a dead end,
+        /// or on to the next road (a loop) at their share. Until the town has the World type's road length.
+        /// </summary>
+        private static void Grow(Ctx c, float targetKm)
+        {
+            RoadHabits hb = c.S.Habits;
+            int n = c.N;
+            float km = 0;
+            foreach (Road r in c.Net.Roads) for (int i = 1; i < r.Points.Count; i++) km += (float)Math.Sqrt(D2(r.Points[i], r.Points[i - 1])) / 1000f;
+            targetKm *= 1.03f;
+            List<float[]> joints = new List<float[]>();
+            foreach (Road r in c.Net.Roads) { joints.Add(r.Points[0]); joints.Add(r.Points[r.Points.Count - 1]); }
+            TownShape sh = c.Shape;
+            float[] have = sh != null ? RoadBands(c, sh) : null;
+            float cx = (c.Centre % n) * Cell, cy = (c.Centre / n) * Cell;
+            int own = 700;
+            int[] why = new int[8];
+            for (int tries = 0; tries < 4000 && km < targetKm; tries++)
+            {
+                // a point on a road, weighted by length
+                float total = 0; foreach (Road r in c.Net.Roads) total += RoadLen(r);
+                float pick = (float)c.Rng.NextDouble() * total; Road parent = null;
+                foreach (Road r in c.Net.Roads) { pick -= RoadLen(r); if (pick <= 0) { parent = r; break; } }
+                if (parent == null || parent.Spans.Count > 0 || parent.Points.Count < 2) { why[0]++; continue; }
+                float at = (float)c.Rng.NextDouble() * RoadLen(parent);
+                float[] p, t; PointAt(parent.Points, at, out p, out t);
+                if (!Inside(c, p[0], p[1], (int)(90 / Cell))) { why[1]++; continue; }
+                // in town, as the World type's town spreads (beyond 90% of its road no more streets)
+                float dc = (float)Math.Sqrt(Sq(p[0] - cx) + Sq(p[1] - cy));
+                if ((sh != null && dc > sh.RoadDec[9] * 1.1f) || (sh == null && dc > 0.38f * n * Cell)) { why[2]++; continue; }
+                // not inside the downtown (already laid); spread as the World type's road spreads from its core: only where
+                // this tenth of the spread, or the next one out, is still short of road
+                if (dc < c.Net.TownRadius + 20) { why[2]++; continue; }
+                if (have != null)
+                {
+                    int band = TownShape.Band(sh.RoadDec, dc);
+                    float want = targetKm * 0.1f;
+                    if (band >= 10 || (have[band] >= want && (band == 9 || have[band + 1] >= want))) { why[2]++; continue; }
+                }
+                // spacing along the road: a learned run from the nearest junction or branch
+                float run = Math.Max(30f, Math.Min(400f, (float)Math.Exp(hb.RunMu + hb.RunSd * Gauss(c.Rng))));
+                bool close = false;
+                foreach (float[] q in joints) if (D2(q, p) < Sq(run * 0.6f)) { close = true; break; }
+                if (close) { why[3]++; continue; }
+                // which way: the side with more buildable land; crossroads at the learned share
+                float nx = -t[1], ny = t[0];
+                float left = BuildAhead(c, p, nx, ny), right = BuildAhead(c, p, -nx, -ny);
+                if (Math.Max(left, right) < 0.35f) { why[4]++; continue; }
+                int side = left >= right ? 1 : -1;
+                bool both = c.Rng.NextDouble() < hb.Cross && Math.Min(left, right) >= 0.35f;
+                int made = 0;
+                for (int k = 0; k < (both ? 2 : 1); k++)
+                {
+                    int sd = k == 0 ? side : -side;
+                    double dev = c.Rng.NextDouble() < hb.Angle90 ? Gauss(c.Rng) * 0.1 : (c.Rng.NextDouble() < 0.5 ? -1 : 1) * (0.35 + 0.7 * c.Rng.NextDouble());
+                    double ang = Math.Atan2(ny * sd, nx * sd) + dev;
+                    bool dead = c.Rng.NextDouble() < hb.DeadShare;
+                    float len = dead ? Math.Max(40f, Math.Min(500f, (float)Math.Exp(hb.DeadMu + hb.DeadSd * Gauss(c.Rng))))
+                                     : Math.Max(60f, Math.Min(700f, (float)Math.Exp(hb.RunMu + hb.RunSd * Gauss(c.Rng)) * (1.5f + (float)c.Rng.NextDouble() * 2)));
+                    float added;
+                    if (GrowStreet(c, p, ang, len, !dead, own++, out added)) { km += added / 1000f; made++; }
+                }
+                if (made == 0) why[5]++; else why[6] += made;
+                if (made > 0 && sh != null) have = RoadBands(c, sh);
+                if (made > 0) { joints.Add(p); Road last = c.Net.Roads[c.Net.Roads.Count - 1]; joints.Add(last.Points[last.Points.Count - 1]); }
+            }
+            GrowLog = string.Format("grow: {0:F1} of {1:F1} km; rejected: bridge/short {2}, rim {3}, out of town {4}, junction near {5}, no land {6}, street failed {7}; streets {8}",
+                km, targetKm, why[0], why[1], why[2], why[3], why[4], why[5], why[6]);
+        }
+
+        public static string GrowLog = "";
+
+        private static float RoadLen(Road r) { float l = 0; for (int i = 1; i < r.Points.Count; i++) l += (float)Math.Sqrt(D2(r.Points[i], r.Points[i - 1])); return l; }
+
+        private static void PointAt(List<float[]> pts, float at, out float[] p, out float[] t)
+        {
+            for (int i = 1; i < pts.Count; i++)
+            {
+                float l = (float)Math.Sqrt(D2(pts[i], pts[i - 1]));
+                if (at <= l || i == pts.Count - 1)
+                {
+                    float f = l > 0 ? Math.Min(1, at / l) : 0;
+                    p = new[] { pts[i - 1][0] + (pts[i][0] - pts[i - 1][0]) * f, pts[i - 1][1] + (pts[i][1] - pts[i - 1][1]) * f };
+                    t = new[] { (pts[i][0] - pts[i - 1][0]) / Math.Max(1e-3f, l), (pts[i][1] - pts[i - 1][1]) / Math.Max(1e-3f, l) };
+                    return;
+                }
+                at -= l;
+            }
+            p = pts[0]; t = new[] { 1f, 0f };
+        }
+
+        /// <summary>Share of buildable ground 30-120 m out from p in direction (dx, dy).</summary>
+        private static float BuildAhead(Ctx c, float[] p, float dx, float dy)
+        {
+            float s = 0; int k = 0;
+            for (float d = 30; d <= 120; d += 15, k++)
+            {
+                float x = p[0] + dx * d, y = p[1] + dy * d;
+                if (!Inside(c, x, y, 2)) continue;
+                int i = Idx(c, x, y);
+                if (c.Land[i] && c.OnRoad[i] == 0 && !c.High[i]) s += c.Build[i];
+            }
+            return s / Math.Max(1, k);
+        }
+
+        /// <summary>One grown street from p heading 'ang' (radians): see Grow. Returns false (nothing added) if under 40 m.</summary>
+        private static bool GrowStreet(Ctx c, float[] p, double ang, float len, bool join, int own, out float added)
+        {
+            RoadHabits hb = c.S.Habits;
+            added = 0;
+            const float step = 8f;
+            List<float[]> pts = new List<float[]> { p };
+            float x = p[0], y = p[1]; double h = ang;
+            int rim = (int)(80 / Cell);
+            bool joined = false;
+            // the bend persists (EA's streets curve in smooth arcs, not a random wander): curvature drifts as an AR(1)
+            // process, scaled so the mean bend per 100 m is the learned one for the land's slope
+            const double Keep = 0.85;
+            double curv = 0;
+            for (float d = step; d <= len * 1.6f + 1; d += step)
+            {
+                float slope = Math.Max(0, c.Slope[Idx(c, x, y)]);
+                int band = slope < 0.04f ? 0 : slope < 0.08f ? 1 : slope < 0.15f ? 2 : 3;
+                float t100 = Math.Min(90f, hb.Turn[band]); // (sparse bands measure noisy)
+                double meanTurn = t100 * step / 100.0 * Math.PI / 180;           // mean |turn| per step
+                curv = Keep * curv + Gauss(c.Rng) * meanTurn / 0.8 * Math.Sqrt(1 - Keep * Keep);
+                h += curv;
+                // on slopes: follow the contour at the learned rate, and never steeper than the grade limit allows
+                double bestH = h; float bestG = float.MaxValue;
+                bool steer = slope > 0.08f && c.Rng.NextDouble() < hb.Contour;
+                foreach (double dh in new[] { 0.0, -0.26, 0.26, -0.52, 0.52 })
+                {
+                    double hh = h + dh;
+                    float qx = x + (float)Math.Cos(hh) * step, qy = y + (float)Math.Sin(hh) * step;
+                    if (!Inside(c, qx, qy, rim)) continue;
+                    float g = Math.Abs(HeightAt(c, qx, qy) - HeightAt(c, x, y)) / step;
+                    float cost = g + (float)Math.Abs(dh) * (steer ? 0.01f : 0.2f);
+                    if (g <= c.MaxGrade * 1.25f && cost < bestG) { bestG = cost; bestH = hh; }
+                    if (!steer && dh == 0 && g <= c.MaxGrade * 1.25f) break;
+                }
+                if (bestG == float.MaxValue) break;
+                h = bestH;
+                float nx = x + (float)Math.Cos(h) * step, ny = y + (float)Math.Sin(h) * step;
+                int i = Idx(c, nx, ny);
+                if (!c.Land[i] || c.High[i]) break;
+                if (d > 24 && c.OnRoad[i] != 0 && c.Owner[i] != own) { if (join || d >= 40) { pts.Add(new[] { nx, ny }); joined = true; } break; }
+                if (d > 24 && c.Crowd[i] > 0.5f && c.CrowdOwner[i] != own)
+                {
+                    if (!join) break;
+                    // a road ahead: run on to it if it's near, else stop clear of it
+                    float[] hit = null;
+                    for (float e = step; e <= 40; e += step)
+                    {
+                        float ex = nx + (float)Math.Cos(h) * e, ey = ny + (float)Math.Sin(h) * e;
+                        if (!Inside(c, ex, ey, rim)) break;
+                        int j = Idx(c, ex, ey);
+                        if (!c.Land[j]) break;
+                        if (c.OnRoad[j] != 0 && c.Owner[j] != own) { hit = new[] { ex, ey }; break; }
+                    }
+                    if (hit == null) break;
+                    pts.Add(new[] { nx, ny }); pts.Add(hit); joined = true; break;
+                }
+                pts.Add(new[] { nx, ny }); x = nx; y = ny;
+                if (!join && d >= len) break;
+            }
+            float L = 0; for (int k = 1; k < pts.Count; k++) L += (float)Math.Sqrt(D2(pts[k], pts[k - 1]));
+            if (L < 40 || (join && !joined && L < len * 0.5f)) return false;
+            AddRoad(c, pts, RoadKind.Lane, own, -1);
+            c.Net.Roads[c.Net.Roads.Count - 1].Grown = true;
+            added = L;
+            return true;
         }
 
         // ---------- the town's main roads out ----------
@@ -576,7 +942,6 @@ namespace CawPlus
                 }
             }
             int arcs = 0;
-            foreach (int v in verts) if (v >= 0) c.Net.LoopVerts++;
             for (int k = 0; k < count; k++)
             {
                 int a = verts[k], b = verts[(k + 1) % count];
@@ -857,9 +1222,9 @@ namespace CawPlus
                             if (nodes > bestNodes || nodes == bestNodes && tie < bestTie) { bestNodes = nodes; bestTie = tie; bestA = a; bestX = ox; bestY = oy; }
                         }
                 }
-                return GridRoads(c, bestX, bestY, bestA, along, across, sb, sa, -(across / 2), Town, -1, true, c.MaxGrade, 0.5f, false);
+                return GridRoads(c, bestX, bestY, bestA, along, across, sb, sa, -(across / 2), Town, -1, true, 0.5f, false);
             }
-            return GridRoads(c, cx, cy, angle, blocks, 1 - jMin, bx, by, jMin, Town, -1, true, c.MaxGrade, 0.55f);
+            return GridRoads(c, cx, cy, angle, blocks, 1 - jMin, bx, by, jMin, Town, -1, true, 0.55f);
         }
 
         /// <summary>
@@ -868,7 +1233,7 @@ namespace CawPlus
         /// further each way. Returns the grid's radius in metres.
         /// </summary>
         private static float GridRoads(Ctx c, float cx, float cy, float angle, int along, int across, float bx, float by, int jMin,
-                                       int own, int area, bool mainStreet, float maxGrade, float minBuild = 0.6f, bool organicRim = true)
+                                       int own, int area, bool mainStreet, float minBuild, bool organicRim = true)
         {
             float ca = (float)Math.Cos(angle), sa = (float)Math.Sin(angle);
             int iMin = mainStreet ? -1 : 0, iMax = mainStreet ? along + 1 : along;
@@ -892,8 +1257,8 @@ namespace CawPlus
                 {
                     int a = i * nj + j;
                     if (!valid[a]) continue;
-                    if (i + 1 < ni && valid[a + nj]) radius = Math.Max(radius, Edge(c, pos[a], pos[a + nj], j + jMin == 0 && mainStreet ? RoadKind.Main : RoadKind.Street, own, area, maxGrade, cx, cy, !organicRim));
-                    if (j + 1 < nj && valid[a + 1] && i + iMin >= 0 && i + iMin <= along) radius = Math.Max(radius, Edge(c, pos[a], pos[a + 1], RoadKind.Street, own, area, maxGrade, cx, cy, !organicRim));
+                    if (i + 1 < ni && valid[a + nj]) radius = Math.Max(radius, Edge(c, pos[a], pos[a + nj], j + jMin == 0 && mainStreet ? RoadKind.Main : RoadKind.Street, own, area, cx, cy, !organicRim));
+                    if (j + 1 < nj && valid[a + 1] && i + iMin >= 0 && i + iMin <= along) radius = Math.Max(radius, Edge(c, pos[a], pos[a + 1], RoadKind.Street, own, area, cx, cy, !organicRim));
                 }
             if (mainStreet && organicRim)
             {
@@ -936,7 +1301,7 @@ namespace CawPlus
             return count;
         }
 
-        private static float Edge(Ctx c, float[] a, float[] b, RoadKind kind, int own, int area, float maxGrade, float cx, float cy, bool straight = false)
+        private static float Edge(Ctx c, float[] a, float[] b, RoadKind kind, int own, int area, float cx, float cy, bool straight)
         {
             float len = (float)Math.Sqrt(D2(a, b));
             int steps = Math.Max(1, (int)(len / Cell));
@@ -949,7 +1314,7 @@ namespace CawPlus
                 if (pts.Count > 0)
                 {
                     float[] p = pts[pts.Count - 1];
-                    if (Math.Abs(HeightAt(c, x, y) - HeightAt(c, p[0], p[1])) / (len / steps) > maxGrade) return 0;
+                    if (Math.Abs(HeightAt(c, x, y) - HeightAt(c, p[0], p[1])) / (len / steps) > c.MaxGrade) return 0;
                 }
                 pts.Add(new[] { x, y });
             }
@@ -1012,6 +1377,7 @@ namespace CawPlus
                         {
                             int i = y * n + x;
                             if (!c.Land[i] || c.Flat[i] < needFlat[pass] || c.OnRoad[i] != 0 || c.BuildWide[i] < needBuild[pass]) continue;
+                            if (c.PlanHouses ? !Homes(c, i) : !Buildable(c, i)) continue; // the painted plan's houses and countryside
                             float dc = Dist(i, c.Centre, n) * Cell;
                             if (dc < minFromCentre) continue;
                             float dmin = float.MaxValue;
@@ -1096,7 +1462,7 @@ namespace CawPlus
             float cx = (c.Centre % n) * Cell, cy = (c.Centre / n) * Cell;
             float angle = (float)Math.Atan2(cy - hy, cx - hx) + (c.Rng.Next(2) == 0 ? 0 : (float)Math.PI / 2);
             int before = c.Net.Roads.Count;
-            GridRoads(c, hx, hy, angle, 3, 2, 110, 75, 0, own, own - 1, false, c.MaxGrade, 0.7f);
+            GridRoads(c, hx, hy, angle, 3, 2, 110, 75, 0, own, own - 1, false, 0.7f);
             if (c.Net.Roads.Count - before < 4) { RemoveFrom(c, before, own); return false; }
             List<int> cells = new List<int>();
             for (int k = before; k < c.Net.Roads.Count; k++) foreach (float[] p in c.Net.Roads[k].Points) cells.Add(Idx(c, p[0], p[1]));
@@ -1165,6 +1531,268 @@ namespace CawPlus
                 AddRoad(c, drive, RoadKind.Lane, own, area);
             }
             return true;
+        }
+
+        // ---------- the painted plan (#171) ----------
+
+        private static PlanArea P(Ctx c, int i) { return c.Plan != null && i >= 0 && i < c.Plan.Length ? (PlanArea)c.Plan[i] : PlanArea.None; }
+
+        /// <summary>Ground the plan leaves free for streets and lots (not forest, park or keep-clear).</summary>
+        private static bool Buildable(Ctx c, int i)
+        {
+            PlanArea a = P(c, i);
+            return a != PlanArea.Forest && a != PlanArea.Park && a != PlanArea.KeepClear;
+        }
+
+        private static bool Homes(Ctx c, int i) { PlanArea a = P(c, i); return a == PlanArea.Houses || a == PlanArea.Countryside; }
+
+        /// <summary>Route cost on painted ground: drawn main roads are followed, forest and parks avoided, keep-clear
+        /// crossed only if there is no other way.</summary>
+        private static float PlanCost(PlanArea a)
+        {
+            switch (a)
+            {
+                case PlanArea.MainRoad: return 0.3f;
+                case PlanArea.Forest: return 3f;
+                case PlanArea.Park: return 2f;
+                case PlanArea.KeepClear: return 20f;
+                default: return 1f;
+            }
+        }
+
+        /// <summary>The planned lots without those whose middle the plan keeps free.</summary>
+        private static List<PlannedLot> PlanLots(Ctx c, List<PlannedLot> lots)
+        {
+            if (c.Plan == null) return lots;
+            lots.RemoveAll(delegate (PlannedLot l) { float[] m = l.Centre; return Inside(c, m[0], m[1]) && !Buildable(c, Idx(c, m[0], m[1])); });
+            return lots;
+        }
+
+        /// <summary>
+        /// Main roads drawn on the plan: each separate stroke is routed from one end to the other (A*, drawn cells cost
+        /// 0.3 x, so the route keeps to the stroke where the land allows), as a main road of the town.
+        /// </summary>
+        private static void PaintedRoads(Ctx c)
+        {
+            int n = c.N;
+            bool[] seen = new bool[n * n];
+            Stack<int> st = new Stack<int>();
+            for (int i0 = 0; i0 < n * n; i0++)
+            {
+                if (seen[i0] || P(c, i0) != PlanArea.MainRoad) continue;
+                List<int> comp = new List<int>();
+                seen[i0] = true; st.Push(i0);
+                while (st.Count > 0)
+                {
+                    int a = st.Pop(); comp.Add(a);
+                    for (int d = 0; d < 8; d++)
+                    {
+                        int x = a % n + DX[d], y = a / n + DY[d];
+                        if (x < 0 || y < 0 || x >= n || y >= n) continue;
+                        int b = y * n + x;
+                        if (!seen[b] && P(c, b) == PlanArea.MainRoad) { seen[b] = true; st.Push(b); }
+                    }
+                }
+                if (comp.Count * Cell < 60) continue;
+                // the stroke's two ends: the cell furthest from any cell, then the cell furthest from that
+                int e1 = comp[0], e2 = comp[0]; float best = -1;
+                foreach (int q in comp) { float d = Dist(q, comp[0], n); if (d > best) { best = d; e1 = q; } }
+                best = -1;
+                foreach (int q in comp) { float d = Dist(q, e1, n); if (d > best) { best = d; e2 = q; } }
+                int a1 = c.Land[e1] ? e1 : NearestLand(c, (e1 % n) * Cell, (e1 / n) * Cell, 40);
+                int a2 = c.Land[e2] ? e2 : NearestLand(c, (e2 % n) * Cell, (e2 / n) * Cell, 40);
+                if (a1 < 0 || a2 < 0) continue;
+                AddPath(c, AStar(c, a1, new[] { a2 }, Town, 0), RoadKind.Main, Town, -1);
+            }
+        }
+
+        // ---------- EA district templates (#137) ----------
+
+        /// <summary>
+        /// One of EA's own districts laid at the hub (the tester, #137: copy EA's road layouts and mix and match them). Up to 8
+        /// templates are drawn (the world type's own 4 times as likely, its region's twice, any world's once), each tried
+        /// at 24 headings, mirrored or not, and 5 spots round the hub; the placement whose roads and lots best fit the land
+        /// (land, inside the map rim, the grade limit, clear of other roads) is laid if at least 80% fits, and joined to the
+        /// town like any neighbourhood.
+        /// </summary>
+        private static bool TemplateHood(Ctx c, int hub, float R, int own)
+        {
+            List<RoadTemplate> pool = new List<RoadTemplate>();
+            foreach (RoadTemplate t in RoadTemplates.All())
+                if (!t.Core && t.LotCount >= 4 && t.Km >= 0.12f && t.Reach <= Math.Max(160f, R * 1.8f)) pool.Add(t);
+            int n = c.N, area = own - 1;
+            float hx = (hub % n) * Cell, hy = (hub / n) * Cell, off = R / 3;
+            TemplateSpot at = BestSpot(c, pool, 4f, 8, hx, hy, new[] { 0f, off }, own);
+            if (at == null || at.Fit < 0.8f) return false;
+            int before = c.Net.Roads.Count;
+            List<int> cells = new List<int>();
+            float laid = LayTemplate(c, at, own, area, cells);
+            if (laid < 0.5f * at.T.Km * 1000 || !Connect(c, cells, own, area, true, R)) { RemoveFrom(c, before, own); return false; }
+            c.Net.TemplatesUsed.Add(at.T.Name);
+            return true;
+        }
+
+        /// <summary>
+        /// The town centre laid from one of EA's town-centre districts (Bridgeport's blocks, Sunset Valley's grid...): the
+        /// world type's own 8 times as likely, its region's twice, any world's once; at most 4 drawn, each tried at 24
+        /// headings, mirrored or not, on and round the centre. Laid if 75% fits the land. Returns its radius in metres, or
+        /// 0 if none fits (the built-in downtown is laid instead).
+        /// </summary>
+        private static float TemplateCentre(Ctx c)
+        {
+            List<RoadTemplate> pool = new List<RoadTemplate>();
+            foreach (RoadTemplate t in RoadTemplates.All()) if (t.Core && t.Km >= 0.3f) pool.Add(t);
+            float cx = (c.Centre % c.N) * Cell, cy = (c.Centre / c.N) * Cell;
+            TemplateSpot at = BestSpot(c, pool, 8f, 4, cx, cy, new[] { 0f, 40f }, Town);
+            if (at == null || at.Fit < 0.75f) return 0;
+            if (LayTemplate(c, at, Town, -1, new List<int>()) < 0.5f * at.T.Km * 1000) return 0;
+            c.Net.TemplatesUsed.Add(at.T.Name + " (centre)");
+            return Math.Max(60f, Math.Min(300f, at.T.Reach));
+        }
+
+        /// <summary>Worlds whose district templates are used only on their own world type.</summary>
+        public static readonly string[] OwnWorldOnly = { "isla_paradiso", "sunlit_tides", "al_simhara", "shang_simla" };
+
+        /// <summary>Only the templates of RoadSettings.TemplateWorlds, when set (all of them otherwise).</summary>
+        internal static List<RoadTemplate> FromWorlds(RoadSettings s, List<RoadTemplate> pool)
+        {
+            if (string.IsNullOrEmpty(s.TemplateWorlds)) return pool;
+            string[] keep = s.TemplateWorlds.Split(',');
+            for (int i = 0; i < keep.Length; i++) keep[i] = keep[i].Trim();
+            return pool.FindAll(delegate (RoadTemplate t) { return Array.IndexOf(keep, t.World) >= 0; });
+        }
+
+        private sealed class TemplateSpot { public RoadTemplate T; public float Fit, Angle, Mirror = 1, X, Y; }
+
+        /// <summary>The best placement near (x, y) of up to 'picks' templates drawn from 'pool' (weighted: the world type's
+        /// own x 'ownWeight', its region's x 2): 24 headings, mirrored or not, at (x, y) and 'offsets' metres off it in
+        /// four directions.</summary>
+        private static TemplateSpot BestSpot(Ctx c, List<RoadTemplate> pool, float ownWeight, int picks, float x, float y, float[] offsets, int own)
+        {
+            string world = WorldPreset.Key(c.S.WorldType ?? ""), region = c.S.Character != null ? c.S.Character.Region : "";
+            // island villages and the Egyptian and Chinese towns stay on their own world type (the tester: their winding,
+            // ungridded streets don't suit Sunset Valley or Twinbrook)
+            pool = pool.FindAll(delegate (RoadTemplate t) { return Array.IndexOf(OwnWorldOnly, t.World) < 0 || t.World == world; });
+            pool = FromWorlds(c.S, pool);
+            if (pool.Count == 0) return null;
+            List<float[]> spots = new List<float[]>();
+            foreach (float o in offsets)
+                if (o == 0) spots.Add(new[] { 0f, 0f });
+                else { spots.Add(new[] { o, 0f }); spots.Add(new[] { -o, 0f }); spots.Add(new[] { 0f, o }); spots.Add(new[] { 0f, -o }); }
+            TemplateSpot best = null;
+            for (int pick = 0; pick < picks && pool.Count > 0; pick++)
+            {
+                float total = 0;
+                foreach (RoadTemplate t in pool) total += Weight(t, world, region, ownWeight);
+                double r = c.Rng.NextDouble() * total;
+                int k = 0;
+                for (; k < pool.Count - 1; k++) { r -= Weight(pool[k], world, region, ownWeight); if (r <= 0) break; }
+                RoadTemplate cand = pool[k]; pool.RemoveAt(k);
+                for (int a = 0; a < 24; a++)
+                    for (int m = -1; m <= 1; m += 2)
+                        foreach (float[] sp in spots)
+                        {
+                            float ang = (float)(a * Math.PI / 12), f = TemplateFit(c, cand, ang, m, x + sp[0], y + sp[1], own);
+                            if (best == null || f > best.Fit)
+                            {
+                                if (best == null) best = new TemplateSpot();
+                                best.T = cand; best.Fit = f; best.Angle = ang; best.Mirror = m; best.X = x + sp[0]; best.Y = y + sp[1];
+                            }
+                        }
+            }
+            return best;
+        }
+
+        /// <summary>Lays a placed template's streets (kept as EA drew them; stretches that don't fit the land left out);
+        /// the metres laid. The cells they run over are added to 'cells'.</summary>
+        private static float LayTemplate(Ctx c, TemplateSpot at, int own, int area, List<int> cells)
+        {
+            float laid = 0;
+            int first = c.Net.Roads.Count;
+            foreach (List<float[]> road in at.T.Roads)
+            {
+                List<float[]> run = new List<float[]>();
+                float[] prev = null;
+                foreach (float[] q in road)
+                {
+                    float[] w = Place(q, at.Angle, at.Mirror, at.X, at.Y);
+                    if (TemplatePointOk(c, w, prev, own)) { run.Add(w); prev = w; continue; }
+                    laid += LayRun(c, run, own, area, cells);
+                    run = new List<float[]>(); prev = null;
+                }
+                laid += LayRun(c, run, own, area, cells);
+            }
+            for (int k = first; k < c.Net.Roads.Count; k++) c.Net.Roads[k].Template = at.T.Name;
+            return laid;
+        }
+
+        private static float Weight(RoadTemplate t, string world, string region, float ownWeight)
+        {
+            return t.World == world ? ownWeight : t.Region == region ? 2f : 1f;
+        }
+
+        /// <summary>Template point (local metres) on the map: turned by 'ang', mirrored across its axis when m = -1, at (x, y).</summary>
+        private static float[] Place(float[] q, float ang, float m, float x, float y)
+        {
+            float lx = q[0], lz = q[1] * m, ca = (float)Math.Cos(ang), sa = (float)Math.Sin(ang);
+            return new[] { x + lx * ca - lz * sa, y + lx * sa + lz * ca };
+        }
+
+        /// <summary>A template road point that can be laid: on land inside the map rim, clear of other roads, and no steeper
+        /// than 1.25 x the grade limit from the previous point.</summary>
+        private static bool TemplatePointOk(Ctx c, float[] w, float[] prev, int own)
+        {
+            if (!Inside(c, w[0], w[1], (int)(80 / Cell))) return false;
+            int i = Idx(c, w[0], w[1]);
+            if (!c.Land[i] || (c.OnRoad[i] != 0 && c.Owner[i] != own) || (c.Crowd[i] > 0.6f && c.CrowdOwner[i] != own)) return false;
+            if (!Buildable(c, i)) return false;
+            if (prev == null) return true;
+            float d = (float)Math.Sqrt(D2(w, prev));
+            return d < 1 || Math.Abs(HeightAt(c, w[0], w[1]) - HeightAt(c, prev[0], prev[1])) / d <= c.MaxGrade * 1.25f;
+        }
+
+        /// <summary>Share of the template that fits here: road length (70%) and lots (30%) on good ground.</summary>
+        private static float TemplateFit(Ctx c, RoadTemplate t, float ang, float m, float x, float y, int own)
+        {
+            float good = 0, all = 0, bad = 0, limit = t.Km * 1000 * 0.25f;
+            foreach (List<float[]> road in t.Roads)
+            {
+                float[] prev = null, prevLocal = null;
+                foreach (float[] q in road)
+                {
+                    float[] w = Place(q, ang, m, x, y);
+                    float seg = prevLocal != null ? (float)Math.Sqrt(D2(q, prevLocal)) : 0;
+                    all += seg;
+                    if (TemplatePointOk(c, w, prev, own)) good += seg; else { bad += seg; if (bad > limit) return 0; }
+                    prev = w; prevLocal = q;
+                }
+            }
+            if (all <= 0) return 0;
+            int lotsOk = 0;
+            foreach (float[] l in t.Lots)
+            {
+                // the lot's middle: corner + half its frontage along u and half its depth along v = (-uz, ux)
+                float[] mid = { l[0] + l[2] * l[4] / 2 - l[3] * l[5] / 2, l[1] + l[3] * l[4] / 2 + l[2] * l[5] / 2 };
+                float[] w = Place(mid, ang, m, x, y);
+                if (!Inside(c, w[0], w[1], 4)) continue;
+                int i = Idx(c, w[0], w[1]);
+                if (c.Land[i] && c.Build[i] >= 0.3f && !(c.OnRoad[i] != 0 && c.Owner[i] != own) && Buildable(c, i)) lotsOk++;
+            }
+            float lots = t.Lots.Count > 0 ? (float)lotsOk / t.Lots.Count : 1;
+            return 0.7f * good / all + 0.3f * lots;
+        }
+
+        /// <summary>Lays a run of fitting template points as a street (if at least 20 m long); its length in metres.</summary>
+        private static float LayRun(Ctx c, List<float[]> run, int own, int area, List<int> cells)
+        {
+            if (run.Count < 2) return 0;
+            float L = RoadLen(run);
+            if (L < 20) return 0;
+            AddRoad(c, run, RoadKind.Street, own, area);
+            Road r = c.Net.Roads[c.Net.Roads.Count - 1];
+            r.Straight = true; // EA's own geometry: kept as drawn (fairing it like the planner's roads didn't remove S-bends)
+            cells.AddRange(r.Cells);
+            return L;
         }
 
         /// <summary>Joins a neighbourhood to the rest from its cell nearest the centre; with 'second', also from the far side.</summary>
@@ -1292,10 +1920,23 @@ namespace CawPlus
                     slope[x, y] = (float)Math.Sqrt(gx * gx + gy * gy);
                 }
             slope = slope.Blur(1f);
-            // buildable: under 10% slope, or up to the road grade limit on worlds set steeper (lots get flattened anyway)
-            // buildable land: slope under the Like world's own (75th percentile of the land its roads cross), else 10 %
+            // buildable land: slope under the World type's BuildSlope (75th percentile of the land its roads cross; default 10 %), or the road grade limit if that is steeper
             float buildSlope = Math.Max(c.S.BuildSlope / 100f, c.MaxGrade);
-            for (int i = 0; i < n * n; i++) build.D[i] = c.Land[i] && slope.D[i] < buildSlope ? 1 : 0;
+            // the high ground EA leaves without roads (Aurora Skies' highlands: 98% of its roads in the lowest 35% of the land,
+            // within 7 m of the sea; tools: scratch roadh/study.py): no town there, and routes cost 25x to cross it
+            c.High = new bool[n * n];
+            if (c.S.RoadTop < 0.99f)
+            {
+                List<float> landH = new List<float>();
+                for (int i = 0; i < n * n; i++) if (c.Land[i]) landH.Add(h.D[i]);
+                if (landH.Count > 0)
+                {
+                    landH.Sort();
+                    float top = landH[Math.Min(landH.Count - 1, (int)(Math.Min(1f, c.S.RoadTop + 0.03f) * (landH.Count - 1)))];
+                    for (int i = 0; i < n * n; i++) c.High[i] = c.Land[i] && h.D[i] > top;
+                }
+            }
+            for (int i = 0; i < n * n; i++) build.D[i] = c.Land[i] && slope.D[i] < buildSlope && !c.High[i] ? 1 : 0;
             c.Slope = slope.D;
             c.Build = build.Blur(40f / Cell).D;
             c.BuildWide = build.Blur(R * 0.6f / Cell).D;
@@ -1306,6 +1947,7 @@ namespace CawPlus
             c.Ridge = new float[n * n]; c.Low = new float[n * n];
             for (int i = 0; i < n * n; i++) { c.Ridge[i] = h.D[i] - broad.D[i]; c.Low[i] = Math.Max(0, (h.D[i] - sea) / span); }
             c.Shore = ShoreDistance(c.Land, n);
+            c.Learned = RoadCost.Multiplier(h, Cell, c.Land, c.Shore, c.Ridge, c.S.LearnedCost);
         }
 
         /// <summary>
@@ -1340,7 +1982,7 @@ namespace CawPlus
         /// <summary>A smoothing move from 'from' to 'to' that takes the road nearer the water than ShoreKeep: refused.</summary>
         private static bool CloserToShore(Ctx c, int from, int to)
         {
-            return c.Shore != null && from >= 0 && c.Shore[to] < ShoreKeep && c.Shore[to] < c.Shore[from];
+            return from >= 0 && c.Shore[to] < ShoreKeep && c.Shore[to] < c.Shore[from];
         }
 
         /// <summary>Unit direction along the contour (across the slope) at (x, y) metres.</summary>
@@ -1407,7 +2049,7 @@ namespace CawPlus
                     if (!c.Land[i])
                     {
                         // a bridge: straight on across the water to the far bank
-                        if (!c.S.Bridges || hd != k || !c.Land[cur]) continue;
+                        if (hd != k || !c.Land[cur]) continue;
                         int far = BridgeLanding(c, cx, cy, k);
                         if (far < 0 || BridgeTooClose(c, st, cur, far)) continue;
                         float span = Dist(far, cur, n) * Cell;
@@ -1438,6 +2080,9 @@ namespace CawPlus
                     if (c.OnRoad[i] == 0 && c.CrowdOwner[i] != own) cost += len * 2.5f * c.Crowd[i];
                     if (c.OnRoad[i] != 0 && c.Owner[i] != own) cost *= 0.35f;
                     if (x < 10 || y < 10 || x > n - 11 || y > n - 11) cost *= 10; // keep off the world edge (~80 m; edge roads still cross it)
+                    if (c.Plan != null) cost *= PlanCost(P(c, i));
+                    if (c.High != null && c.High[i]) cost *= 25; // the World type keeps its roads off this high ground
+                    if (c.Learned != null) cost *= c.Learned[i];  // where EA's roads go on land like this
                     int ns = i * 9 + k;
                     float ng = gcur + cost;
                     if (c.Stamp[ns] != stamp || ng < c.G[ns])
@@ -1457,13 +2102,13 @@ namespace CawPlus
 
         /// <summary>
         /// From land cell (cx, cy) heading k: the first land cell on the far side of the water, if the water is at most
-        /// MaxBridgeWater wide, the far bank isn't much higher or lower, and no road is crossed. -1 otherwise.
+        /// MaxWater wide (the world type's longest bridge less 16 m), the far bank isn't much higher or lower, and no road is crossed. -1 otherwise.
         /// </summary>
         private static int BridgeLanding(Ctx c, int cx, int cy, int k)
         {
             int n = c.N;
             float len = (k & 1) == 1 ? Cell * 1.41421f : Cell;
-            int maxSteps = (int)(MaxBridgeWater / len) + 1;
+            int maxSteps = (int)(c.MaxWater / len) + 1;
             for (int t = 1; t <= maxSteps + 1; t++)
             {
                 int x = cx + DX[k] * t, y = cy + DY[k] * t;
@@ -1493,13 +2138,14 @@ namespace CawPlus
             return -1;
         }
 
-        /// <summary>Bridge pieces are 65-72 m long, so two bridges need ~110 m between them: none on this route within
+        /// <summary>Bridge pieces are up to BridgeSpan long, so two bridges need that + 38 m between them: none on this route within
         /// 14 steps back, and none planned already near this one's middle.</summary>
         private static bool BridgeTooClose(Ctx c, int st, int cur, int far)
         {
             int n = c.N;
             float mx = (cur % n + far % n) * Cell / 2, my = (cur / n + far / n) * Cell / 2;
-            foreach (float[] b in c.BridgeMids) if (Sq(b[0] - mx) + Sq(b[1] - my) < 110 * 110) return true;
+            float apart = c.BridgeSpan + 38;
+            foreach (float[] b in c.BridgeMids) if (Sq(b[0] - mx) + Sq(b[1] - my) < apart * apart) return true;
             int s = st;
             for (int k = 0; k < 14 && s >= 0; k++)
             {
@@ -1888,7 +2534,7 @@ namespace CawPlus
                     if (!atJ) continue;
                     if (e == 1) p.Reverse();
                     // the point 'run' metres along (not past the road's middle)
-                    float total = 0; for (int k = 1; k < p.Count; k++) total += (float)Math.Sqrt(D2(p[k - 1], p[k]));
+                    float total = RoadLen(p);
                     float want = Math.Min(run, total * 0.45f), acc = 0; int kk = -1; float[] at = null;
                     for (int k = 1; k < p.Count && at == null; k++)
                     {
@@ -1907,11 +2553,11 @@ namespace CawPlus
                         // off-square bends into it; two such bends between near junctions made an S)
                         float[] sq = SquareTo(c.Net, r, p[0], at, want);
                         if (sq != null && StraightOk(c, p[0], sq)) at = sq;
-                    }
-                    if (at != null && want >= 12f && StraightOk(c, p[0], at))
-                    {
-                        p.RemoveRange(1, kk - 1);
-                        p.Insert(1, at);
+                        if (StraightOk(c, p[0], at))
+                        {
+                            p.RemoveRange(1, kk - 1);
+                            p.Insert(1, at);
+                        }
                     }
                     if (e == 1) p.Reverse();
                 }
@@ -1929,7 +2575,7 @@ namespace CawPlus
             {
                 if (r.Spans.Count > 0 || r.Straight) continue;
                 List<float[]> p = r.Points;
-                float len = 0; for (int k = 1; k < p.Count; k++) len += (float)Math.Sqrt(D2(p[k - 1], p[k]));
+                float len = RoadLen(p);
                 if (len > 200 || len < 30) continue;
                 float[] a = p[0], b = p[p.Count - 1];
                 if (len > 1.3f * Math.Sqrt(D2(a, b))) continue; // a winding road stays as it is
@@ -1998,9 +2644,9 @@ namespace CawPlus
                         // 0. a piece joined to nothing at either end (left over when a link was dropped) goes
                         float[] far = p[p.Count - 1];
                         bool inTown = ctr != null && D2(tip, ctr) < downtownR * downtownR;
-                        if (looseAtStart.ContainsKey(r) && !inTown && !Touches(c.Net, r, far) && EdgeDist(c, far[0], far[1]) >= 60f)
+                        if (looseAtStart.ContainsKey(r) && !r.OwnIsland && !inTown && !Touches(c.Net, r, far) && EdgeDist(c, far[0], far[1]) >= 60f)
                         {
-                            float plen = 0; for (int k = 1; k < p.Count; k++) plen += (float)Math.Sqrt(D2(p[k - 1], p[k]));
+                            float plen = RoadLen(p);
                             if (plen < 300f) { c.Net.Roads.RemoveAt(ri); ri--; c.Net.DeadEndsDropped++; changed = true; break; }
                         }
                         // 1. join: straight on from the tip to the road it nears
@@ -2020,7 +2666,7 @@ namespace CawPlus
                         // 0.5 km of road and 5 T-junctions per map with it (Fidelity roads 68.4 -> 66.3 on 8 worlds, #165)
                         if (!joined && d < 30f)
                         {
-                            float len = 0; for (int k = 1; k < p.Count; k++) len += (float)Math.Sqrt(D2(p[k - 1], p[k]));
+                            float len = RoadLen(p);
                             List<float[]> q = Resample(p, 4f);
                             int cut = -1; float cutLen = 0;
                             for (int k = 1; k < q.Count; k++)
@@ -2151,7 +2797,7 @@ namespace CawPlus
                 foreach (int g in order)
                 {
                     bool precious = false;
-                    for (int i = 0; i < n && !precious; i++) precious = comp[i] == g && (roads[i].Spans.Count > 0 || roads[i].Kind == RoadKind.Main);
+                    for (int i = 0; i < n && !precious; i++) precious = comp[i] == g && (roads[i].Spans.Count > 0 || roads[i].Kind == RoadKind.Main || roads[i].OwnIsland);
                     if (!precious && compLen[g] < DropKm * 1000f) { drop[g] = true; c.Net.IslandsDropped++; c.Net.IslandsDroppedKm += compLen[g] / 1000f; }
                 }
                 for (int i = n - 1; i >= 0; i--) if (drop.ContainsKey(comp[i])) roads.RemoveAt(i);
@@ -2166,8 +2812,7 @@ namespace CawPlus
             float best = float.MaxValue; float[] d = null;
             for (int k = 1; k < q.Count; k++)
             {
-                List<float[]> seg = new List<float[]> { q[k - 1], q[k] };
-                float e = MinSegD2(seg, x);
+                float e = SegD2(q[k - 1], q[k], x);
                 if (e >= best) continue;
                 float dx = q[k][0] - q[k - 1][0], dz = q[k][1] - q[k - 1][1], l = (float)Math.Sqrt(dx * dx + dz * dz);
                 if (l < 1e-3f) continue;
@@ -2207,7 +2852,7 @@ namespace CawPlus
             near = null; at = null;
             List<float[]> p = r.Points;
             float[] other = e == 0 ? p[p.Count - 1] : p[0];
-            float len = 0; for (int k = 1; k < p.Count; k++) len += (float)Math.Sqrt(D2(p[k - 1], p[k]));
+            float len = RoadLen(p);
             float best = reach;
             foreach (Road o in net.Roads)
             {
@@ -2427,8 +3072,6 @@ namespace CawPlus
 
         private static int Find(int[] par, int a) { while (par[a] != a) { par[a] = par[par[a]]; a = par[a]; } return a; }
 
-        /// <summary>Joins each piece not connected to the centre by the cheapest route to any other piece; drops pieces
-        /// that can't be reached (water, cliffs).</summary>
         /// <summary>
         /// Side streets until the network is about 'targetKm' long: a buildable spot 40-250 m from the roads, routed (A*,
         /// the usual costs) to the nearest road, where it ends in a T; the spot itself is the street's dead end.
@@ -2471,6 +3114,7 @@ namespace CawPlus
                 int rim = (int)(90 / Cell); // not under the distant terrain
                 if (x < rim || y < rim || x >= n - rim || y >= n - rim) continue;
                 if (!c.Land[i] || c.OnRoad[i] != 0 || c.Build[i] < 0.45f || c.Crowd[i] > 0.05f) continue;
+                if (c.PlanHouses ? !Homes(c, i) && P(c, i) != PlanArea.Centre : !Buildable(c, i)) continue; // the painted plan
                 // near the network, not out in the wilds
                 int near = NearestRoad(c, x, y, (int)(250 / Cell));
                 if (near < 0) continue;
@@ -2610,6 +3254,8 @@ namespace CawPlus
             return -1;
         }
 
+        /// <summary>Joins each piece not connected to the largest one (nearest the centre first) by the cheapest route to
+        /// any other piece; drops pieces that can't be reached (water, cliffs).</summary>
         private static void ConnectAll(Ctx c)
         {
             int n = c.N;
@@ -2640,6 +3286,88 @@ namespace CawPlus
                 }
                 for (int i = 0; i < lab.Length; i++) if (lab[i] == pick) { c.OnRoad[i] = 0; c.Owner[i] = 0; }
                 c.Net.Sites.RemoveAll(delegate (LotSite st) { int i = Idx(c, st.P[0], st.P[1]); return RoadDistance(c, i % n, i / n, 6) > 5; });
+            }
+        }
+
+        /// <summary>
+        /// Streets for islands the town's roads can't reach (no bridge spans the water): on each island of at least
+        /// 6 ha without a road, at its most buildable spot away from the shore, an EA district template that fits
+        /// (as TemplateHood), else one straight street along the island. These are separate networks (Road.OwnIsland):
+        /// EA's Isla Paradiso has roads on several islands, its Sims crossing by boat (#166: ours had 1.7 km of its 5.2).
+        /// </summary>
+        private static void IslandTowns(Ctx c)
+        {
+            int n = c.N;
+            int[] lab = new int[n * n];
+            for (int i = 0; i < lab.Length; i++) lab[i] = -1;
+            List<List<int>> comps = new List<List<int>>();
+            Stack<int> st = new Stack<int>();
+            for (int i = 0; i < n * n; i++)
+            {
+                if (!c.Land[i] || lab[i] >= 0) continue;
+                List<int> comp = new List<int>();
+                lab[i] = comps.Count; st.Push(i);
+                while (st.Count > 0)
+                {
+                    int a = st.Pop(); comp.Add(a);
+                    int ax = a % n, ay = a / n;
+                    for (int d = 0; d < 8; d++)
+                    {
+                        int bx = ax + DX[d], by = ay + DY[d];
+                        if (bx < 0 || by < 0 || bx >= n || by >= n) continue;
+                        int b = by * n + bx;
+                        if (c.Land[b] && lab[b] < 0) { lab[b] = comps.Count; st.Push(b); }
+                    }
+                }
+                comps.Add(comp);
+            }
+            int own = 300;
+            for (int k = 0; k < comps.Count; k++)
+            {
+                List<int> comp = comps[k];
+                if (comp.Count * Cell * Cell < 60000 || lab[c.Centre] == k) continue;
+                bool roaded = false;
+                foreach (int i in comp) if (c.OnRoad[i] != 0) { roaded = true; break; }
+                if (roaded) continue;
+                // the most buildable spot at least 24 m from the shore; the island's long axis through it
+                int hub = -1; float bv = float.MinValue; double sx = 0, sy = 0;
+                foreach (int i in comp) { sx += i % n; sy += i / n; }
+                sx /= comp.Count; sy /= comp.Count;
+                double cxx = 0, cyy = 0, cxy = 0;
+                foreach (int i in comp)
+                {
+                    double dx = i % n - sx, dy = i / n - sy; cxx += dx * dx; cyy += dy * dy; cxy += dx * dy;
+                    if (c.Shore[i] < 24 || !Inside(c, (i % n) * Cell, (i / n) * Cell, (int)(80 / Cell))) continue;
+                    float v = c.BuildWide[i] + c.Flat[i] * 0.5f;
+                    if (v > bv) { bv = v; hub = i; }
+                }
+                if (hub < 0) continue;
+                float hx = (hub % n) * Cell, hy = (hub / n) * Cell;
+                float reach = (float)Math.Sqrt(comp.Count * Cell * Cell / Math.PI);
+                int before = c.Net.Roads.Count;
+                List<RoadTemplate> pool = new List<RoadTemplate>();
+                foreach (RoadTemplate t in RoadTemplates.All())
+                    if (!t.Core && t.LotCount >= 4 && t.Km >= 0.12f && t.Reach <= reach * 1.1f) pool.Add(t);
+                TemplateSpot at = BestSpot(c, pool, 4f, 6, hx, hy, new[] { 0f, reach / 4 }, own);
+                bool laid = at != null && at.Fit >= 0.75f && LayTemplate(c, at, own, own - 1, new List<int>()) >= 0.5f * at.T.Km * 1000;
+                if (laid) c.Net.TemplatesUsed.Add(at.T.Name + " (island)");
+                else
+                {
+                    RemoveFrom(c, before, own);
+                    double ang = 0.5 * Math.Atan2(2 * cxy, cxx - cyy);
+                    float ux = (float)Math.Cos(ang), uy = (float)Math.Sin(ang);
+                    // from the hub both ways along the island's long axis, joined into one street
+                    List<float[]> a = Walk(c, hx, hy, ux, uy, reach * 0.9f, own), b = Walk(c, hx, hy, -ux, -uy, reach * 0.9f, own);
+                    List<float[]> street = new List<float[]>();
+                    for (int q = a.Count - 1; q >= 0; q--) street.Add(a[q]);
+                    street.Add(new[] { hx, hy });
+                    street.AddRange(b);
+                    if (RoadLen(street) < 60) continue;
+                    AddRoad(c, street, RoadKind.Street, own, own - 1);
+                }
+                for (int r = before; r < c.Net.Roads.Count; r++) c.Net.Roads[r].OwnIsland = true;
+                c.Net.IslandStreets++;
+                own++;
             }
         }
 
@@ -2703,10 +3431,8 @@ namespace CawPlus
             return o;
         }
 
-        /// <summary>Straight runs + round bends instead of the relaxed grid route (#162); false = the old smoothing.</summary>
-        public static bool TautRoads = true;
         /// <summary>How far (m) a straightened stretch may lie from the route the search found.</summary>
-        public static float TautReach = 40f;
+        private const float TautReach = 40f;
         /// <summary>Roads keep this far (m) from the map edge unless their route already ran nearer (edge roads).</summary>
         private const float EdgeKeep = 80f;
 
@@ -2765,8 +3491,8 @@ namespace CawPlus
                 int ci = Idx(c, p[k][0], p[k][1]);
                 if (ci >= 0)
                 {
-                    if (c.Shore != null) shoreMin = Math.Min(shoreMin, c.Shore[ci]);
-                    if (c.Crowd != null && c.CrowdOwner[ci] != own) crowdMax = Math.Max(crowdMax, c.Crowd[ci]);
+                    shoreMin = Math.Min(shoreMin, c.Shore[ci]);
+                    if (c.CrowdOwner[ci] != own) crowdMax = Math.Max(crowdMax, c.Crowd[ci]);
                 }
                 edgeMin = Math.Min(edgeMin, EdgeDist(c, p[k][0], p[k][1]));
             }
@@ -2782,11 +3508,11 @@ namespace CawPlus
                 float t = Math.Min(len, q * step), x = a[0] + ux * t, y = a[1] + uy * t;
                 int ci = Idx(c, x, y);
                 if (ci < 0 || !c.Land[ci]) return false;
-                if (c.Shore != null && c.Shore[ci] < ShoreKeep && c.Shore[ci] < shoreMin - 1) return false;
+                if (c.Shore[ci] < ShoreKeep && c.Shore[ci] < shoreMin - 1) return false;
                 if (EdgeDist(c, x, y) < Math.Min(EdgeKeep, edgeMin) - 1) return false;
                 bool nearEnd = t < 14 || len - t < 14;
                 if (!nearEnd && c.OnRoad[ci] != 0 && !mine.ContainsKey(ci)) return false;
-                if (!nearEnd && c.Crowd != null && c.CrowdOwner[ci] != own && c.Crowd[ci] > Math.Max(0.6f, crowdMax) + 0.05f) return false;
+                if (!nearEnd && c.CrowdOwner[ci] != own && c.Crowd[ci] > Math.Max(0.6f, crowdMax) + 0.05f) return false;
                 float h = HeightAt(c, x, y);
                 if (q >= 2 && Math.Abs(h - h2) / (2 * step) > gradeLim) return false; // grade over 8 m
                 h2 = h1; h1 = h;

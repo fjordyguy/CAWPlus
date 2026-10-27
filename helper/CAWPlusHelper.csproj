@@ -1,5 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <!-- CAWPlusHelper.exe: works out terrain for CAW Plus in its own 64-bit .NET process (faster, no 32-bit memory limit).
+  <!-- CAWPlusHelper.exe: works out terrain, road plans and Auto-Paint layers for CAW Plus in its own 64-bit .NET process (faster, no 32-bit memory limit).
        CAW Plus starts it with a job folder (src/HelperLink.cs) and falls back to its own code if it's missing or fails.
        Built for .NET 8; RollForward=Major lets it run on any newer runtime (.NET 10 Desktop Runtime x64). -->
   <PropertyGroup>
@@ -19,8 +19,8 @@
     <RootNamespace>CawPlus</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="../src/Grid.cs;../src/TerrainGen.cs;../src/TerrainChecks.cs;../src/Work.cs;../src/WorldPresets.cs;../src/Embedded.cs;../src/RoadCharacter.cs;../src/LotPlanner.cs;../src/RoadPlanner.cs;../src/RoadChecks.cs;../src/TownShape.cs;../src/Downtown.cs;../src/RoadProfile.cs;../src/LandChecklist.cs;../src/HelperLink.cs;../src/PathPlanner.cs;../src/PaintJob.cs;../src/PaintEngine.cs;../src/StyleModel.cs;../src/ManualEdits.cs;../src/ImageIO.cs;../src/EdgeBlend.cs;../src/TextureLibrary.cs;../src/TextureAnalyzer.cs" />
-    <EmbeddedResource Include="../library/*_terrain.json;../library/*_roadgeo.json;../library/*_landform.json;../library/worlds.txt" LogicalName="Library.%(Filename)%(Extension)" />
+    <Compile Include="../src/Grid.cs;../src/TerrainGen.cs;../src/TerrainChecks.cs;../src/Work.cs;../src/WorldPresets.cs;../src/Embedded.cs;../src/RoadCharacter.cs;../src/LotPlanner.cs;../src/RoadPlanner.cs;../src/RoadHabits.cs;../src/RoadCost.cs;../src/TownDesigner.cs;../src/RoadTemplates.cs;../src/RoadPuzzle.cs;../src/Bridges.cs;../src/RoadChecks.cs;../src/TownShape.cs;../src/Downtown.cs;../src/RoadProfile.cs;../src/LandChecklist.cs;../src/HelperLink.cs;../src/PathPlanner.cs;../src/PaintJob.cs;../src/PaintEngine.cs;../src/StyleModel.cs;../src/ManualEdits.cs;../src/ImageIO.cs;../src/EdgeBlend.cs;../src/TextureLibrary.cs;../src/TextureAnalyzer.cs;../src/WorldSketch.cs;../src/PlanMap.cs" />
+    <EmbeddedResource Include="../library/*_terrain.json;../library/*_roadgeo.json;../library/*_landform.json;../library/worlds.txt;../library/road_templates.txt;../library/road_pieces.txt;../library/town_design.txt;../library/road_cost.txt" LogicalName="Library.%(Filename)%(Extension)" />
   </ItemGroup>
   <ItemGroup>
     <!-- ImageIO / PaintEngine use System.Drawing types (Windows only; the helper is win-x64) -->

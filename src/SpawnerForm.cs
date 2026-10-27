@@ -20,6 +20,7 @@ namespace CawPlus
         private CheckBox chkOwnLayers;
         private NumericUpDown nudSeed;
         private Button btnRead, btnPlace, btnRemove;
+        private bool placing, stopPlacing; // Place becomes Stop while placing
         private PictureBox picture;
         private ProgressBar progress;
         private Label status, counts;
@@ -105,7 +106,7 @@ namespace CawPlus
             y += 26;
             btnRead = new Button(); btnRead.Text = "Read world"; btnRead.SetBounds(x, y, 110, 28); btnRead.Click += delegate { ReadWorld(); };
             btnPlace = new Button(); btnPlace.Text = "Place"; btnPlace.SetBounds(x + 115, y, 110, 28); btnPlace.Font = new Font(Font, FontStyle.Bold);
-            btnPlace.Click += delegate { PlaceAll(); };
+            btnPlace.Click += delegate { if (placing) stopPlacing = true; else PlaceAll(); };
             btnRemove = new Button(); btnRemove.Text = "Remove last"; btnRemove.SetBounds(x + 230, y, 110, 28); btnRemove.Click += delegate { RemoveLast(); };
             Controls.Add(btnRead); Controls.Add(btnPlace); Controls.Add(btnRemove);
             y += 32;
@@ -188,10 +189,7 @@ namespace CawPlus
                 layerNames = Caw.LayerNames();
 
                 OnProgress("Reading the object catalog", 98);
-                PlacementEngine.Known.Clear();
-                foreach (ObjectLibrary l in ObjectLibrary.LoadAll())
-                    foreach (RefObject r in l.Items)
-                        if (r.Instance != null && r.Instance.Length == 16 && !PlacementEngine.Known.ContainsKey(r.Instance)) PlacementEngine.Known[r.Instance] = r.Kind;
+                PlacementEngine.LoadKnown();
                 all.Clear();
                 foreach (Caw.CatalogItem c in Caw.Catalog())
                 {
@@ -383,6 +381,7 @@ namespace CawPlus
             if (MessageBox.Show(this, "Place " + plan.Count + " spawners" + (chkOwnLayers.Checked ? " (sorted into World Layers)" : "") + "?\n\n" +
                     "'Remove last' (or CAW's Undo) takes them out again.", "Spawners", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
             SetBusy(true);
+            placing = true; stopPlacing = false; btnPlace.Text = "Stop"; btnPlace.Enabled = true; int stoppedAt = -1;
             lastPlaced.Clear();
             int failed = 0;
             DateTime t0 = DateTime.Now;
@@ -425,15 +424,21 @@ namespace CawPlus
                     catch (Exception ex) { if (failed < 5) Log.Error("Placing " + all[p.Item].Name + " failed", ex); }
                     if (o != null) lastPlaced.Add(o); else failed++;
                     if (k == 9 && lastPlaced.Count == 0) { Status("The first 10 failed; stopped. See the log."); break; }
-                    if (k % 10 == 0) { OnProgress("Placing " + (k + 1) + " of " + plan.Count, 100 * k / plan.Count); Application.DoEvents(); }
+                    if (k % 10 == 0) { OnProgress("Placing " + (k + 1) + " of " + plan.Count + " (click Stop to stop)", 100 * k / plan.Count); Injector.Pump(); }
+                    if (stopPlacing) { stoppedAt = k + 1; Log.Info("Spawners: stopped by the user after " + stoppedAt + " of " + plan.Count); break; }
                 }
                 Log.Info(string.Format("Spawners: placed {0}, failed {1}, {2:F0} s", lastPlaced.Count, failed, (DateTime.Now - t0).TotalSeconds));
                 Log.Info("Spawners timing: " + Caw.PlaceTimingSummary());
                 if (lastPlaced.Count > 0) Injector.Done("spawners");
-                Status("Placed " + lastPlaced.Count + " spawners" + (failed > 0 ? " (" + failed + " failed, see log)" : "") + ".");
+                Status((stoppedAt >= 0 ? "Stopped: placed " : "Placed ") + lastPlaced.Count + " spawners" + (failed > 0 ? " (" + failed + " failed, see log)" : "") + "." + (stoppedAt >= 0 ? " 'Remove last' takes them out again." : ""));
                 foreach (SpawnPlacement p in plan) occupied.Add(new[] { p.MapX, p.MapY, 3f / terrain.CellMeters });
             }
-            catch (Exception ex) { Log.Error("Spawners failed", ex); Status("Placing failed: " + ex.Message); }
+            catch (Exception ex)
+            {
+                Log.Error("Spawners failed", ex); Status("Placing failed: " + ex.Message);
+                if (ex is WorldChangedException) lastPlaced.Clear(); // they belong to the other world: 'Remove last' mustn't touch them
+            }
+            placing = false; stopPlacing = false; btnPlace.Text = "Place";
             SetBusy(false);
         }
 

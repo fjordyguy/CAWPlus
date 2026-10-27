@@ -167,7 +167,7 @@ namespace CawPlus
             {
                 ti = TerrainSampler.Analyze(world, Caw.LayerCount(Caw.Terrain(world)), OnProgress);
                 DistantInput inp = new DistantInput();
-                inp.Heights = ti.Heights; inp.Orientation = ti.Orientation; inp.Origin = ti.Origin; inp.WorldSize = ti.WorldSize; inp.Sea = ti.WaterLevel;
+                inp.Heights = ti.Heights; inp.Orientation = ti.Orientation; inp.WorldSize = ti.WorldSize; inp.Sea = ti.WaterLevel;
                 OnProgress("Reading the paint colours", 50);
                 try { inp.Albedo = Albedo(world, 512, out albedoNote); inp.AlbW = inp.AlbH = 512; }
                 catch (Exception ex) { Log.Error("Distant terrain: reading the paint failed", ex); inp.Albedo = null; albedoNote = "paint not read"; }
@@ -483,7 +483,7 @@ namespace CawPlus
                 {
                     r = DistantMaker.Make(inp, s, BgProgress);
                     BgProgress("Writing the package", 95);
-                    pkg = DistantMaker.Package(r, worldKey, Caw.WorldName(world), tpl);
+                    pkg = DistantMaker.Package(r, worldKey, tpl);
                     return null;
                 });
                 try { Log.Info(EdgeCheck(world, inp, r)); } catch (Exception ex) { Log.Error("Distant terrain edge check failed", ex); }
@@ -559,7 +559,7 @@ namespace CawPlus
                 return;
             }
             List<object> old = new List<object>(), mine = new List<object>();
-            foreach (object o in DistantTerrain.Objects(null))
+            foreach (object o in DistantTerrain.Objects())
             {
                 string n = "";
                 try { n = Convert.ToString(Caw.GetProperty(o, "InstanceName")); } catch { }
@@ -598,7 +598,15 @@ namespace CawPlus
 
         private void OpenFolder()
         {
-            try { System.Diagnostics.Process.Start("explorer.exe", "\"" + (Directory.Exists(CawPackagesFolder()) ? CawPackagesFolder() : OwnFolder) + "\""); }
+            try
+            {
+                // explorer by its full path, not through the shell: a bare "explorer.exe" is looked up in the current
+                // folder first, which a file dialog may have moved anywhere
+                string explorer = Path.Combine(Environment.GetEnvironmentVariable("SystemRoot") ?? @"C:\Windows", "explorer.exe");
+                System.Diagnostics.ProcessStartInfo psi = new System.Diagnostics.ProcessStartInfo(explorer, "\"" + (Directory.Exists(CawPackagesFolder()) ? CawPackagesFolder() : OwnFolder) + "\"");
+                psi.UseShellExecute = false;
+                System.Diagnostics.Process.Start(psi).Dispose();
+            }
             catch (Exception ex) { Status("Couldn't open the folder: " + ex.Message); }
         }
 
@@ -620,7 +628,7 @@ namespace CawPlus
             {
                 int pct = bgPct;
                 if (pct >= 0) { progress.Value = Math.Max(0, Math.Min(100, pct)); status.Text = bgStage + "..."; }
-                Application.DoEvents();
+                Injector.Pump();
             }
             bgPct = -1;
             if (error != null) throw new InvalidOperationException(error.Message, error);
@@ -632,7 +640,7 @@ namespace CawPlus
             progress.Value = Math.Max(0, Math.Min(100, pct));
             status.Text = stage + "...";
             status.Refresh(); progress.Refresh();
-            Application.DoEvents();
+            Injector.Pump();
         }
 
         private void Status(string s) { status.Text = s; }

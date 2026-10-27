@@ -41,7 +41,7 @@ namespace CawPlus
             Dictionary<PaintRole, Grid> masks;
             if (Style != null)
             {
-                StyledGenerator gen = new StyledGenerator(Style, Heights, Cell, S.WaterLevel, WaterOffset, S.Seed, Mapped);
+                StyledGenerator gen = new StyledGenerator(Style, Heights, Cell, S.WaterLevel, WaterOffset, S.Seed, Mapped, S.Detail);
                 gen.SetGains(Gains); // start from the corrections found for the preview
                 masks = gen.Fit(Amounts(S), S.Softness / 50f, 3, progress);
                 FillMissingRoles(masks, Style, Heights, Cell, S);
@@ -166,10 +166,14 @@ namespace CawPlus
             sb.Append("backup=").Append(Backup).Append('\n');
             sb.Append("out=").Append(OutDir).Append('\n');
             sb.Append("fingerprint=").Append(Fingerprint).Append('\n');
-            sb.Append("names=").Append(string.Join("|", Names)).Append('\n');
+            // layer names come from the world file and may hold any character (a line break would start a new key, a '|'
+            // would shift every later name): each is written base64-encoded
+            string[] enc = new string[Names.Length];
+            for (int i = 0; i < Names.Length; i++) enc[i] = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(Names[i] ?? ""));
+            sb.Append("names=").Append(string.Join("|", enc)).Append('\n');
             sb.Append("edge=").Append(EdgeLayer).Append('\n');
             sb.Append("chunk=").Append(ChunkLimit).Append('\n');
-            if (Style != null) sb.Append("stylename=").Append(Style.Name).Append('\n');
+            if (Style != null) sb.Append("stylename=").Append(HelperLink.OneLine(Style.Name)).Append('\n');
             File.WriteAllText(Path.Combine(dir, "job.txt"), sb.ToString());
             if (Style != null) File.WriteAllText(Path.Combine(dir, "style.txt"), Style.ToText());
         }
@@ -207,7 +211,9 @@ namespace CawPlus
             j.PatchPx = HelperLink.PF(kv["patch"]);
             j.KeepEdits = bool.Parse(kv["keep"]);
             j.State = kv["state"]; j.Backup = kv["backup"]; j.OutDir = kv["out"]; j.Fingerprint = kv["fingerprint"];
-            j.Names = kv["names"].Split('|');
+            string[] enc = kv["names"].Length > 0 ? kv["names"].Split('|') : new string[0];
+            j.Names = new string[enc.Length];
+            for (int i = 0; i < enc.Length; i++) j.Names[i] = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(enc[i]));
             j.EdgeLayer = int.Parse(kv["edge"]);
             j.ChunkLimit = int.Parse(kv["chunk"]);
             string sf = Path.Combine(dir, "style.txt");

@@ -292,6 +292,80 @@ namespace CawPlus
 
         public static void RemovePond(object world, object pond) { Call(world, "RemovePond", pond); }
 
+        /// <summary>
+        /// Makes a pond as CreatePond does, then reads back how far its water spread (GetPondRect of the newest pond). CAW
+        /// floods every connected bit of ground below the level, so a pond whose seed lands outside its hollow, or whose rim
+        /// leaks, covers everything lower round it (the tester's v1.3.1 test on Aurora Skies: the lowland under water up to the
+        /// hills). A pond wider than 'maxSpan' metres is taken out again. 'span' = the water's width in metres (-1 unknown).
+        /// </summary>
+        public static object CreatePondChecked(object world, float x, float z, float level, float spacing, float maxSpan, out float span)
+        {
+            span = -1;
+            object pond = CreatePond(world, x, z, level, spacing);
+            if (pond == null) return null;
+            span = PondSpan(world, level);
+            if (span > maxSpan) { RemoveFlooding(world, level, maxSpan); return null; }
+            return pond;
+        }
+
+        /// <summary>
+        /// The widest water of any pond at this level (within 5 cm), metres; -1 if none found. Ponds are matched by level, not
+        /// by index: the newest pond need not be the last index (v1.3.2's check measured index n-1 and the flood stayed).
+        /// </summary>
+        public static float PondSpan(object world, float level)
+        {
+            float span = -1;
+            foreach (object[] p in PondsWithRects(world))
+                if (Math.Abs((float)p[1] - level) < 0.05f) span = Math.Max(span, (float)p[2]);
+            return span;
+        }
+
+        /// <summary>Removes every pond at this level whose water is wider than maxSpan metres; returns how many.</summary>
+        public static int RemoveFlooding(object world, float level, float maxSpan)
+        {
+            int n = 0;
+            foreach (object[] p in PondsWithRects(world))
+                if (Math.Abs((float)p[1] - level) < 0.05f && (float)p[2] > maxSpan) { RemovePond(world, p[0]); n++; }
+            return n;
+        }
+
+        /// <summary>Every pond as (pond, water level, width in metres).</summary>
+        private static System.Collections.Generic.List<object[]> PondsWithRects(object world)
+        {
+            System.Collections.Generic.List<object[]> list = new System.Collections.Generic.List<object[]>();
+            try
+            {
+                uint n = Convert.ToUInt32(Call(world, "GetPondsCount"));
+                MethodInfo rect = FindMethod(world.GetType(), "GetPondRect", 3);
+                for (uint i = 0; i < n; i++)
+                {
+                    object pond = Call(world, "GetPondById", i);
+                    if (pond == null || rect == null) continue;
+                    Type v2 = rect.GetParameters()[1].ParameterType.GetElementType();
+                    object[] args = { i, Activator.CreateInstance(v2), Activator.CreateInstance(v2) };
+                    float span = -1;
+                    if (Convert.ToBoolean(rect.Invoke(world, args)))
+                        span = Math.Max(Math.Abs(F(args[2], "x") - F(args[1], "x")), Math.Abs(F(args[2], "y") - F(args[1], "y")));
+                    list.Add(new object[] { pond, Convert.ToSingle(Call(pond, "GetWaterLevel")), span });
+                }
+            }
+            catch (Exception ex) { Log.Error("Reading the ponds failed", ex); }
+            return list;
+        }
+
+        /// <summary>
+        /// Removes every pond in the world. Used before new land is imported: a pond keeps its water level, so one left from
+        /// the old land floods all the new ground below that level that joins it (the tester's 2026-10-26 test: 4, then 8 ponds).
+        /// </summary>
+        public static int RemoveAllPonds(object world)
+        {
+            uint n = Convert.ToUInt32(Call(world, "GetPondsCount"));
+            System.Collections.Generic.List<object> all = new System.Collections.Generic.List<object>();
+            for (uint i = 0; i < n; i++) { object p = Call(world, "GetPondById", i); if (p != null) all.Add(p); }
+            foreach (object p in all) RemovePond(world, p);
+            return all.Count;
+        }
+
         /// <summary>Ponds as (water level, minX, minZ, maxX, maxZ) in world metres.</summary>
         public static System.Collections.Generic.List<float[]> Ponds(object world)
         {
@@ -337,12 +411,11 @@ namespace CawPlus
             return list;
         }
 
-        /// <summary>Road splines as their 4 control points (x, z pairs) in world metres; footpaths left out unless asked for.</summary>
-        public static System.Collections.Generic.List<float[]> RoadSplines(object world, bool footpaths = false)
+        /// <summary>Road splines as their 4 control points (x, z pairs) in world metres; footpaths left out.</summary>
+        public static System.Collections.Generic.List<float[]> RoadSplines(object world)
         {
             System.Collections.Generic.List<float[]> paths, bridges;
             System.Collections.Generic.List<float[]> roads = RoadSplines(world, out paths, out bridges);
-            if (footpaths) roads.AddRange(paths);
             return roads;
         }
 
@@ -466,15 +539,6 @@ namespace CawPlus
             }
             catch (Exception ex) { Log.Error("Listing SpeedTrees failed", ex); }
 
-            // Top-level catalog folders, to tune filtering.
-            System.Collections.Generic.Dictionary<string, int> folders = new System.Collections.Generic.Dictionary<string, int>();
-            foreach (CatalogItem c in list)
-            {
-                string[] parts = (c.Path ?? "").Split('/');
-                string top = parts.Length > 2 ? parts[0] + "/" + parts[1] + "/" + parts[2] : c.Path;
-                int n; folders.TryGetValue(top ?? "", out n); folders[top ?? ""] = n + 1;
-            }
-            foreach (System.Collections.Generic.KeyValuePair<string, int> kv in folders) Log.Info("Catalog folder '" + kv.Key + "': " + kv.Value);
             return list;
         }
 
@@ -508,7 +572,7 @@ namespace CawPlus
                 {
                     fPt.SetValue(args[0], Vec2(fPt.FieldType, p[0], p[1]));
                     apply.Invoke(world, args);
-                    if ((++done & 1023) == 0 && progress != null) { progress("Blocking steep ground", 100 * done / points.Count); System.Windows.Forms.Application.DoEvents(); }
+                    if ((++done & 1023) == 0 && progress != null) { progress("Blocking steep ground", 100 * done / points.Count); Injector.Pump(); }
                 }
             }
             finally
@@ -612,7 +676,7 @@ namespace CawPlus
             return t.IsValueType ? Activator.CreateInstance(t) : null;
         }
 
-        private static Type FindType(string fullName)
+        internal static Type FindType(string fullName)
         {
             foreach (Assembly a in AppDomain.CurrentDomain.GetAssemblies())
             {
@@ -839,13 +903,13 @@ namespace CawPlus
         }
 
         /// <summary>A catalog item for a game object by instance, for objects the Metadata panel doesn't list.</summary>
-        public static CatalogItem ObjectByInstance(string name, ulong instance)
+        public static CatalogItem ObjectByInstance(string name, ulong instance, uint group = 0)
         {
             Type keyType = FindType("Sims3.CSHost.ResourceKey");
             if (keyType == null) return null;
             CatalogItem c = new CatalogItem();
             c.Name = name; c.Path = ""; c.IsTree = false;
-            c.Key = Ctor(keyType, 3, typeof(uint)).Invoke(new object[] { 0x02DC343Fu, 0u, instance });
+            c.Key = Ctor(keyType, 3, typeof(uint)).Invoke(new object[] { 0x02DC343Fu, group, instance });
             return c;
         }
 
@@ -933,7 +997,6 @@ namespace CawPlus
             return null;
         }
 
-        /// <summary>Removes an object the undoable way (CAW's own delete command).</summary>
         /// <summary>Removes road pieces (undoable, as CAW's Delete key does).</summary>
         public static void DeleteRoads(object[] roads, bool group)
         {
@@ -944,6 +1007,7 @@ namespace CawPlus
             Call(MainForm, "SubmitUndoCommand", c.Invoke(new object[] { group, arr }));
         }
 
+        /// <summary>Removes an object the undoable way (CAW's own delete command).</summary>
         public static void Delete(object placed, bool group)
         {
             Type t = Asm.GetType("WorldBuilderCS.CmdDeleteGameObject", true);
